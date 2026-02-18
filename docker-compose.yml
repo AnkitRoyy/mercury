@@ -1,0 +1,10 @@
+services:
+  ros:
+    build: .
+    container_name: ros2_dev
+    network_mode: host
+    volumes:
+      - ./:/home/dev/ros2_ws
+    working_dir: /home/dev/ros2_ws
+    stdin_open: true
+    tty: true
