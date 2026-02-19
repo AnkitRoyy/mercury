@@ -5,5 +5,5 @@ offical repo for ICMTC UGVC-2026
 
 ```
 sudo docker compose build 
-sudo docker compose run
+sudo docker compose run ros
 ```

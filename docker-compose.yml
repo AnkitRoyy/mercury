@@ -4,7 +4,7 @@ services:
     container_name: ros2_dev
     network_mode: host
     volumes:
-      - ./:/home/dev/ros2_ws
-    working_dir: /home/dev/ros2_ws
+      - ./:/root/mercury
+    working_dir: /root/mercury
     stdin_open: true
     tty: true
