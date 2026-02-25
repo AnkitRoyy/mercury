@@ -9,6 +9,9 @@
 
   <depend>launch</depend>
   <depend>launch_ros</depend>
+  <depend>robot_state_publisher</depend>
+  <depend>xacro</depend>
+  <depend>tf2_ros</depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

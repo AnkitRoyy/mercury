@@ -1,80 +1,87 @@
 from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription
-from launch_ros.actions import Node
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import PathJoinSubstitution
-from launch_ros.substitutions import FindPackageShare
+from ament_index_python.packages import get_package_share_directory
+import os
+
 
 def generate_launch_description():
 
-    fake_encoder = Node(
-        package="localization",
-        executable="fake_encoder",
-        name="fake_encoder",
-        output="screen"
+    # ================= ROBOT DESCRIPTION =================
+    pkg_description = get_package_share_directory('description')
+    description_launch = os.path.join(
+        pkg_description,
+        'launch',
+        'description.launch.py'
     )
 
-    realsense_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            PathJoinSubstitution([
-                FindPackageShare("realsense2_camera"),
-                "launch",
-                "rs_launch.py"
-            ])
-        ),
+    description = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(description_launch)
+    )
+
+    # ================= LIDAR =================
+    pkg_rplidar = get_package_share_directory('rplidar_ros')
+    rplidar_launch = os.path.join(
+        pkg_rplidar,
+        'launch',
+        'rplidar_a3_launch.py'
+    )
+
+    lidar = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(rplidar_launch),
         launch_arguments={
-            "enable_gyro": "true",
-            "enable_accel": "true",
-            "unite_imu_method": "2"
+            'serial_port': '/dev/ttyUSB1',
+            'frame_id': 'laser_link'
         }.items()
     )
 
-    ekf = Node(
-        package="robot_localization",
-        executable="ekf_node",
-        name="ekf_filter_node",
-        output="screen",
-        parameters=[
-            PathJoinSubstitution([
-                FindPackageShare("localization"),
-                "config",
-                "ekf.yaml"
-            ])
-        ]
+    # ================= REALSENSE IMU =================
+    pkg_realsense = get_package_share_directory('realsense2_camera')
+    realsense_launch = os.path.join(
+        pkg_realsense,
+        'launch',
+        'rs_launch.py'
     )
 
-    lidar_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            PathJoinSubstitution([
-                FindPackageShare("bringup"),
-                "launch",
-                "lidar.launch.py"
-            ])
-        )
+    realsense = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(realsense_launch),
+        launch_arguments={
+            'enable_color': 'false',
+            'enable_depth': 'false',
+            'enable_gyro': 'true',
+            'enable_accel': 'true',
+            'unite_imu_method': '2'
+        }.items()
+    )
+
+    # ================= EKF =================
+    pkg_localization = get_package_share_directory('localization')
+    ekf_launch = os.path.join(
+        pkg_localization,
+        'launch',
+        'ekf.launch.py'
+    )
+
+    ekf = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(ekf_launch)
+    )
+
+    # ================= SLAM =================
+    pkg_bringup = get_package_share_directory('bringup')
+    slam_launch = os.path.join(
+        pkg_bringup,
+        'launch',
+        'slam.launch.py'
     )
 
     slam = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            PathJoinSubstitution([
-                FindPackageShare("slam_toolbox"),
-                "launch",
-                "online_async_launch.py"
-            ])
-        ),
-        launch_arguments={
-            "odom_topic": "/odometry/filtered",
-            "scan_topic": "/scan",
-            "base_frame": "base_link",
-            "odom_frame": "odom",
-            "map_frame": "map",
-            "laser_frame": "laser"
-        }.items()
+        PythonLaunchDescriptionSource(slam_launch)
     )
 
     return LaunchDescription([
-        fake_encoder,
-        realsense_launch,
+        description,
+        lidar,
+        realsense,
         ekf,
-        lidar_launch,
         slam
     ])
