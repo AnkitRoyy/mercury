@@ -28,8 +28,10 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'lane_costmap = perception.lane_costmap:main',
+            # old costmap node (kept but not launched by default anymore)
             'calibrate_homography = perception.calibrate_homography:main',
+            # NEW: lightweight detection node that feeds lane_assist_node
+            'lane_detection = perception.lane_detection:main',
         ],
     },
 )

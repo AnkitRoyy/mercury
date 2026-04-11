@@ -4,27 +4,26 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
 
-    lane_costmap_node = Node(
+    # ── Lane detection node ───────────────────────────────────────────
+    # Replaces lane_costmap.  Publishes:
+    #   /lane_center_error  (std_msgs/Float32)  — pixel offset from lane centre
+    #   /lane_visible       (std_msgs/Bool)     — whether a lane is detected
+    #   /lane_debug/image   (sensor_msgs/Image) — BEV overlay for RViz / rqt
+    lane_detection_node = Node(
         package='perception',
-        executable='lane_costmap',
-        name='lane_costmap',
+        executable='lane_detection',
+        name='lane_detection_node',
         output='screen',
-        parameters=[
-            {
-                "use_sim_time": True,
-                "image_topic": "/camera/image_raw",
-                "camera_info_topic": "/camera/camera_info",
-                "costmap_topic": "/perception/road_costmap",
-                "costmap_frame": "map",
-                "bev_width": 800,
-                "bev_height": 600,
-                "resolution": 0.007,
-                "undistort": True,
-                "show_debug": True,
-            }
-        ]
+        parameters=[{
+            'use_sim_time': True,
+            'image_topic': '/camera/image_raw',
+            'bev_width': 640,
+            'bev_height': 480,
+            # Set False in headless / CI environments
+            'show_debug': True,
+        }]
     )
 
     return LaunchDescription([
-        lane_costmap_node
+        lane_detection_node,
     ])

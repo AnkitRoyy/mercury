@@ -4,24 +4,19 @@ local_costmap:
       use_sim_time: True
       global_frame: odom
       robot_base_frame: base_link
+
       update_frequency: 10.0
       publish_frequency: 5.0
+
       rolling_window: true
-      width: 40
-      height: 40
+      width: 5
+      height: 5
       resolution: 0.05
-      footprint: "[[0.25, 0.24], [0.25, -0.24], [-0.25, -0.24], [-0.25, 0.24]]"
-      footprint_padding: 0.05
 
-      plugins: ["lane_layer", "obstacle_layer", "inflation_layer"]
+      footprint: "[[0.25, 0.20], [0.25, -0.20], [-0.25, -0.20], [-0.25, 0.20]]"
+      footprint_padding: 0.02
 
-      lane_layer:
-        plugin: "nav2_costmap_2d::StaticLayer"
-        map_topic: /perception/road_costmap
-        map_subscribe_transient_local: True
-        subscribe_to_updates: True
-        use_maximum: True
-        track_unknown_space: False
+      plugins: ["obstacle_layer", "inflation_layer"]
 
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
@@ -29,11 +24,16 @@ local_costmap:
         scan:
           topic: /scan
           max_obstacle_height: 2.0
+          min_obstacle_height: 0.05
           clearing: True
           marking: True
           data_type: LaserScan
+          obstacle_min_range: 0.15
+          obstacle_max_range: 10.0
+          raytrace_min_range: 0.15
+          raytrace_max_range: 10.0
 
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        inflation_radius: 0.3
-        cost_scaling_factor: 3.0
+        inflation_radius: 0.6
+        cost_scaling_factor: 2.5
