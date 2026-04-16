@@ -26,17 +26,17 @@ global_costmap:
       #         plugins: ["lane_layer", "obstacle_layer", "inflation_layer"]
       #         and uncomment the lane_layer block below.
       # ─────────────────────────────────────────────────────────────────────
-      plugins: ["obstacle_layer", "inflation_layer"]
+      plugins: ["lane_layer", "obstacle_layer", "inflation_layer"]
 
       # ── Lane boundary layer (DISABLED — uncomment for STEP 2) ────────────
-      # lane_layer:
-      #   plugin: "nav2_costmap_2d::StaticLayer"
-      #   map_topic: /perception/road_costmap
-      #   subscribe_to_updates: true
-      #   enabled: true
-      #   map_subscribe_transient_local: true
-      #   unknown_cost_value: -1
-      #   lethal_cost_threshold: 100
+      lane_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_topic: /perception/road_costmap
+        subscribe_to_updates: true
+        enabled: true
+        map_subscribe_transient_local: true
+        unknown_cost_value: -1
+        lethal_cost_threshold: 100
 
       # ── LiDAR obstacle layer ─────────────────────────────────────────────
       obstacle_layer:
