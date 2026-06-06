@@ -101,6 +101,6 @@ def generate_launch_description():
         localization,
         planning,
         perception,
-        goal_decomposer,
+        # goal_decomposer,
         rviz_node,
     ])

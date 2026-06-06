@@ -9,7 +9,12 @@ def generate_launch_description():
     use_sim_time_arg = DeclareLaunchArgument(
         'use_sim_time', default_value='true'
     )
-
+    follower_node  = Node(
+    package='perception',
+    executable='follower',
+    name='follower',
+    output='screen'
+)
     lane_detection_node = Node(
         package='perception',
         executable='lane_detection',
@@ -152,8 +157,9 @@ def generate_launch_description():
 
     return LaunchDescription([
         use_sim_time_arg,
-        lane_detection_node,
+        follower_node,
+        # lane_detection_node,
         lane_costmap,
-        lane_assist,
+        # lane_assist,
         pothole_costmap, 
     ])

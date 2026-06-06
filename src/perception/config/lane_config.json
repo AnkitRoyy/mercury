@@ -1,0 +1,18 @@
+{
+    "roi_top": 30,
+    "roi_bottom": 100,
+    "roi_left": 0,
+    "roi_right": 100,
+    "h_min": 0,
+    "h_max": 180,
+    "s_min": 0,
+    "s_max": 255,
+    "v_min": 78,
+    "v_max": 255,
+    "canny_low": 50,
+    "canny_high": 255,
+    "kernel_size": 3,
+    "min_contour_area": 7761,
+    "poly_epsilon_x1000": 55,
+    "overlay_alpha": 255
+}
