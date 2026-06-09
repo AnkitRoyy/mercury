@@ -11,7 +11,7 @@ from cv_bridge import CvBridge
 
 from ament_index_python.packages import get_package_share_directory
 import os
-# add to perceptio/lane_perception
+
 pkg_share = get_package_share_directory("perception")
 
 LANE_CONFIG_PATH    = os.path.join(pkg_share, "config", "lane_config.json")
@@ -259,33 +259,78 @@ class LaneFollowingNode(Node):
         if left_fit  is not None: self.last_left_fit  = left_fit
         if right_fit is not None: self.last_right_fit = right_fit
 
-        # ── simple weighted fusion (fresh fits only — no stale lane cache) ────
+        # ── precompute axle position (needed by fusion sanity check) ──────────
+        axle_y_pix = float(mask.shape[0] - 1)
+        axle_x_pix = float(mask.shape[1]) / 2.0
+
+        # ── weighted fusion ───────────────────────────────────────────────────
         #
-        # road_fit  weight 2  — moment centroid, most reliable on curves
-        # both lanes weight 2 — averaged first, then added (equal to road)
-        # one lane   weight 1 — half influence of road
-        # fallback   cached road only if nothing fresh at all
+        # Priority order:
+        #   1. road_fit (fresh moment centroid)  weight=3  — most reliable on curves
+        #   2. lane center (both fresh fits)     weight=1  — only if agrees with road
+        #      lane center (both fresh, no road) weight=2  — full trust when road absent
+        #   3. single lane line (no road)        weight=1  — half influence
+        #   4. last resort: cached road only     weight=1  — when nothing fresh at all
+        #
+        # KEY CHANGE vs old code:
+        #   - road weight raised 2→3 so it dominates on curves
+        #   - lane lines rejected if they disagree with road by >80px at axle
+        #   - stale LANE cache never used (was polluting curves); road cache kept
+        #   - both-lane weight lowered 2→1 when road is also present
         fits    = []
         weights = []
+        src_labels = []
 
         if road_fit is not None:
             fits.append(road_fit)
-            weights.append(2)
+            weights.append(3)
+            src_labels.append("road")
 
         if left_fit is not None and right_fit is not None:
             lane_center = (left_fit + right_fit) / 2.0
-            fits.append(lane_center)
-            weights.append(2)
-        elif left_fit is not None:
+
+            if road_fit is not None:
+                # sanity check: reject lane center if it disagrees with road
+                road_x = (road_fit[0]*axle_y_pix**2
+                          + road_fit[1]*axle_y_pix
+                          + road_fit[2])
+                lane_x = (lane_center[0]*axle_y_pix**2
+                          + lane_center[1]*axle_y_pix
+                          + lane_center[2])
+                if abs(road_x - lane_x) < 80:   # tune: ~40% of lane width in px
+                    fits.append(lane_center)
+                    weights.append(1)
+                    src_labels.append("L+R")
+                else:
+                    self.get_logger().debug(
+                        f"Lane center rejected: road_x={road_x:.0f}  "
+                        f"lane_x={lane_x:.0f}  diff={abs(road_x-lane_x):.0f}px"
+                    )
+            else:
+                # no road available — trust both lane lines fully
+                fits.append(lane_center)
+                weights.append(2)
+                src_labels.append("L+R")
+
+        elif left_fit is not None and road_fit is None:
             fits.append(left_fit)
             weights.append(1)
-        elif right_fit is not None:
+            src_labels.append("L")
+        elif right_fit is not None and road_fit is None:
             fits.append(right_fit)
             weights.append(1)
+            src_labels.append("R")
 
-        if not fits and self.last_road_fit is not None:
-            fits.append(self.last_road_fit)
-            weights.append(1)
+        # last resort: cached road only — never mix cache with fresh lane lines
+        if not fits:
+            if self.last_road_fit is not None:
+                fits.append(self.last_road_fit)
+                weights.append(1)
+                src_labels.append("road(cache)")
+            elif self.last_left_fit is not None and self.last_right_fit is not None:
+                fits.append((self.last_left_fit + self.last_right_fit) / 2.0)
+                weights.append(1)
+                src_labels.append("L+R(cache)")
 
         center_fit = None
         if fits:
@@ -303,8 +348,6 @@ class LaneFollowingNode(Node):
                 p2 = (int(np.clip(center_x[i+1], 0, self.bev_width-1)), int(plot_y[i+1]))
                 cv2.line(debug, p1, p2, (255, 0, 255), 2)
 
-            axle_y_pix     = float(mask.shape[0] - 1)
-            axle_x_pix     = float(mask.shape[1]) / 2.0
             center_at_axle = (center_fit[0]*axle_y_pix**2
                               + center_fit[1]*axle_y_pix
                               + center_fit[2])
@@ -339,11 +382,7 @@ class LaneFollowingNode(Node):
                          else "TURN LEFT" if pixel_error < -20
                          else "STRAIGHT")
 
-            src = "/".join(filter(None, [
-                "road" if road_fit  is not None else None,
-                "L"    if left_fit  is not None else None,
-                "R"    if right_fit is not None else None,
-            ])) or "cache"
+            src = "/".join(src_labels) if src_labels else "cache"
 
             hud = [
                 (f"CTE      : {cte_metres:+.3f} m  ({cte_pixels:+.0f} px)", 40),
@@ -356,11 +395,6 @@ class LaneFollowingNode(Node):
             for text, yp in hud:
                 cv2.putText(debug, text, (20, yp),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.60, (0, 255, 255), 2)
-
-            # self.get_logger().info(
-            #     f"CTE={cte_metres:+.3f}m  path_angle={path_ang_deg:+.2f}deg  "
-            #     f"lane_width={lane_width_m:.2f}m  signals={src}"
-            # )
 
             arr = Float64MultiArray()
             arr.data = [cte_metres, path_angle, lane_width_m, 1.0]
@@ -393,7 +427,10 @@ def main(args=None):
     finally:
         node.destroy_node()
         cv2.destroyAllWindows()
-        rclpy.shutdown()
+        try:
+            rclpy.shutdown()
+        except Exception:
+            pass   # suppress double-shutdown on SIGINT
 
 
 if __name__ == "__main__":
