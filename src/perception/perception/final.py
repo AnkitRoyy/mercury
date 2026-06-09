@@ -11,7 +11,7 @@ from cv_bridge import CvBridge
 
 from ament_index_python.packages import get_package_share_directory
 import os
-
+# add to perceptio/lane_perception
 pkg_share = get_package_share_directory("perception")
 
 LANE_CONFIG_PATH    = os.path.join(pkg_share, "config", "lane_config.json")
@@ -357,10 +357,10 @@ class LaneFollowingNode(Node):
                 cv2.putText(debug, text, (20, yp),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.60, (0, 255, 255), 2)
 
-            self.get_logger().info(
-                f"CTE={cte_metres:+.3f}m  path_angle={path_ang_deg:+.2f}deg  "
-                f"lane_width={lane_width_m:.2f}m  signals={src}"
-            )
+            # self.get_logger().info(
+            #     f"CTE={cte_metres:+.3f}m  path_angle={path_ang_deg:+.2f}deg  "
+            #     f"lane_width={lane_width_m:.2f}m  signals={src}"
+            # )
 
             arr = Float64MultiArray()
             arr.data = [cte_metres, path_angle, lane_width_m, 1.0]

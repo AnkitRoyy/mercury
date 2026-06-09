@@ -3,11 +3,8 @@ from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 import os
 
-
 def generate_launch_description():
-
     pkg_planning = get_package_share_directory('planning')
-
     params = os.path.join(pkg_planning, 'config', 'nav2_params.yaml')
     global_costmap = os.path.join(pkg_planning, 'config', 'global_costmap.yaml')
     local_costmap = os.path.join(pkg_planning, 'config', 'local_costmap.yaml')
@@ -25,7 +22,10 @@ def generate_launch_description():
         executable='controller_server',
         name='controller_server',
         parameters=[params, local_costmap],
-        output='screen'
+        output='screen',
+        remappings=[
+            ('/cmd_vel', '/cmd_vel_nav'),   # feed twist_to_stamped → Gazebo
+        ]
     )
 
     bt_navigator = Node(
@@ -41,7 +41,10 @@ def generate_launch_description():
         executable='behavior_server',
         name='behavior_server',
         parameters=[params],
-        output='screen'
+        output='screen',
+        remappings=[
+            ('/cmd_vel', '/cmd_vel_nav'),   # recovery behaviors also use cmd_vel
+        ]
     )
 
     lifecycle_manager = Node(

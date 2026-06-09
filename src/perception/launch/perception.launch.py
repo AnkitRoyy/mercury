@@ -15,6 +15,12 @@ def generate_launch_description():
     name='follower',
     output='screen'
 )
+#     lane_controller_node  = Node(
+#     package='perception',
+#     executable='lane_controller',
+#     name='follower',
+#     output='screen'
+# )
     lane_detection_node = Node(
         package='perception',
         executable='lane_detection',
@@ -158,8 +164,10 @@ def generate_launch_description():
     return LaunchDescription([
         use_sim_time_arg,
         follower_node,
-        # lane_detection_node,
-        lane_costmap,
-        # lane_assist,
-        pothole_costmap, 
+        # # lane_detection_node,
+        # lane_costmap,
+        # # lane_assist,
+        # pothole_costmap, 
+        # lane_follower_node,
+        # lane_controller_node
     ])

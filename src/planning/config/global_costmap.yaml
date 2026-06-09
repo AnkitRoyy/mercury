@@ -7,16 +7,11 @@ global_costmap:
 
       update_frequency: 2.0
       publish_frequency: 1.0
-      transform_tolerance: 0.5      # ← add this
+      transform_tolerance: 0.5
 
       rolling_window: false
+      always_send_full_costmap: true
 
-      # Fixed size — matches lane/pothole costmap publishers exactly.
-      # DO NOT add a static_layer for /map (SLAM) here — SLAM publishes
-      # at 0.05m resolution which conflicts with our 0.10m costmaps and
-      # causes the costmap to oscillate between sizes, aborting all goals.
-      # SLAM is used for LOCALIZATION only (EKF + slam_toolbox).
-      # Navigable space is defined by lane_layer (road boundaries).
       width:      70
       height:     70
       resolution: 0.10
@@ -26,31 +21,13 @@ global_costmap:
       footprint: "[[0.25, 0.20], [0.25, -0.20], [-0.25, -0.20], [-0.25, 0.20]]"
       footprint_padding: 0.02
 
+      # lane_layer and pothole_layer removed for simulation —
+      # those topics only exist when real perception nodes are running.
+      # Re-add them for real robot deployment.
       plugins:
-        - lane_layer
-        - pothole_layer
         - obstacle_layer
         - inflation_layer
 
-      # Lane boundary lethal cells — keeps robot inside the track.
-      # Published by lane_costmap_node at 700×700 @ 0.10m.
-      lane_layer:
-        plugin: "nav2_costmap_2d::StaticLayer"
-        enabled: True
-        map_topic: /perception/road_costmap
-        map_subscribe_transient_local: True
-        subscribe_to_updates: False
-
-      # Pothole lethal circles — persistent, grows as robot explores track.
-      # Published by pothole_costmap_node at 700×700 @ 0.10m.
-      pothole_layer:
-        plugin: "nav2_costmap_2d::StaticLayer"
-        enabled: True
-        map_topic: /perception/pothole_costmap
-        map_subscribe_transient_local: True
-        subscribe_to_updates: True
-
-      # LiDAR obstacles (drums, walls, people) — global marking.
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: True
@@ -72,4 +49,4 @@ global_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         inflation_radius: 0.6
-        cost_scaling_factor: 0.5 #0.5
+        cost_scaling_factor: 0.5

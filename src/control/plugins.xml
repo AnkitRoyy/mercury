@@ -1,0 +1,11 @@
+<library path="stanley_controller">
+  <class
+    name="control/StanleyController"
+    type="control::StanleyController"
+    base_class_type="nav2_core::Controller">
+    <description>
+      Stanley road-following controller. Uses /lane_data_array from lane
+      perception. Ignores Nav2 global path — the road is the path.
+    </description>
+  </class>
+</library>

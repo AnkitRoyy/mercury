@@ -1,5 +1,4 @@
-# stanley_controller_node.py  (no watchdog) add to controller/controller.py
-
+# stanley_controller_node.py  (no watchdog)
 
 import math
 import rclpy
