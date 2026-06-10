@@ -7,6 +7,7 @@
 #include <limits>
 #include <utility>
 #include <atomic>
+#include <vector>
 
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_lifecycle/lifecycle_node.hpp"
@@ -46,28 +47,21 @@ public:
 
 private:
   // ── costmap readiness ─────────────────────────────────────────────────────
-  // Returns true once costmap has received at least one sensor update.
-  // Safe to call from computeVelocityCommands on every tick — fast after latch.
   bool isCostmapReady();
 
   // ── obstacle helpers ──────────────────────────────────────────────────────
 
   // Scale forward speed 0→1 based on nearest obstacle ahead.
-  // Returns 1.0 (no slowdown) if costmap is not yet ready.
   double computeObstacleSpeedScale(const geometry_msgs::msg::PoseStamped & pose);
 
-  // Signed lateral cost bias in [-1, +1].
-  //   +1 = heavy cost on right → blend toward A* path (avoid right obstacle)
-  //   -1 = heavy cost on left  → blend toward A* path (avoid left obstacle)
-  // Returns 0.0 (no bias) if costmap is not yet ready.
+  // Signed lateral cost bias computed across a LOOKAHEAD arc, not just
+  // at the current position. Returns bias in [-1, +1].
+  // Multiple slices are sampled from sample_dist_near_ → sample_dist_far_
+  // and distance-weighted so far threats count more (pre-emptive steering).
   double computeLateralCostBias(
     const geometry_msgs::msg::PoseStamped & pose, double yaw);
 
   // ── A* path helpers ───────────────────────────────────────────────────────
-
-  // Returns {cte, heading_error} from the stored Nav2 A* path.
-  // cte > 0  → robot is left  of path → steer right (angular.z < 0)
-  // cte < 0  → robot is right of path → steer left  (angular.z > 0)
   std::pair<double, double> getPathCteAndHeading(
     const geometry_msgs::msg::PoseStamped & pose);
 
@@ -82,9 +76,6 @@ private:
   std::shared_ptr<nav2_costmap_2d::Costmap2DROS> costmap_ros_;
 
   // ── costmap warmup state ──────────────────────────────────────────────────
-  // Latches true the first time isCurrent() returns true.
-  // Declared atomic so it is safe to read from the control thread without
-  // a mutex (only ever transitions false → true, never back).
   std::atomic<bool> costmap_ready_{false};
 
   // ── A* path state ─────────────────────────────────────────────────────────
@@ -95,6 +86,7 @@ private:
   std::mutex lane_mutex_;
   double cte_metres_     = 0.0;
   double path_angle_rad_ = 0.0;
+  double lane_width_m_   = 0.0;   // [2] from lane_data_array
   bool   lane_detected_  = false;
 
   // ── Stanley params ────────────────────────────────────────────────────────
@@ -105,22 +97,25 @@ private:
   double max_steer_rad_ = M_PI / 6.0;
 
   // ── obstacle params ───────────────────────────────────────────────────────
-  double stop_dist_      = 0.8;   // hard-stop distance (m)
-  double slowdown_dist_  = 3.0;   // begin slowing at this distance (m)
-  double min_speed_      = 0.20;  // minimum speed while slowing
-  double nudge_weight_   = 0.9;   // kept for compat (not used in blend logic)
-  double lateral_offset_ = 0.8;   // lateral sample distance (m)
-  double sample_dist_    = 2.5;   // forward sample distance (m)
+  double stop_dist_      = 0.5;
+  double slowdown_dist_  = 3.0;
+  double min_speed_      = 0.25;
+  double nudge_weight_   = 0.5;   // kept for compat
+
+  // ── lookahead lateral sampling ────────────────────────────────────────────
+  // The robot samples costmap at N slices between near and far distances.
+  // Each slice is weighted by its distance (farther = higher weight) so
+  // the controller starts steering BEFORE it reaches the obstacle.
+  double lateral_offset_   = 0.8;   // how wide left/right to probe (m)
+  double sample_dist_near_ = 1.0;   // closest slice distance (m)
+  double sample_dist_far_  = 4.0;   // furthest slice distance (m)  ← key param
+  int    sample_slices_    = 6;     // number of slices between near and far
 
   // ── blend param ───────────────────────────────────────────────────────────
-  // Bias magnitude at which A* path weight reaches 1.0 (full takeover).
-  // Lower value = A* kicks in sooner / more aggressively.
-  double obstacle_blend_threshold_ = 0.20;
+  double obstacle_blend_threshold_ = 0.15;
 
   // ── startup param ─────────────────────────────────────────────────────────
-  // Extra sleep in activate() to let costmap receive its first scan (ms).
-  // Set to 0 to rely purely on isCurrent() check with no blocking sleep.
-  int costmap_warmup_ms_ = 500;
+  int costmap_warmup_ms_ = 3000;
 };
 
 }  // namespace control

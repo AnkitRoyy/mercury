@@ -10,8 +10,8 @@ planner_server:
       allow_unknown: true
       max_iterations: 1000000
       max_on_approach_iterations: 1000
-      max_planning_time: 5.0
-      cost_travel_multiplier: 2.0
+      max_planning_time: 1.0
+      cost_travel_multiplier: 5.0        # ↑ was 2.0 — A* strongly avoids inflated cells
       use_final_approach_orientation: false
       smoother:
         max_iterations: 1000
@@ -47,43 +47,43 @@ controller_server:
       max_steer_deg:  30.0
 
       # ── forward obstacle ──────────────────────────────────────────────
-      stop_dist:      0.5     # hard stop if obstacle closer than this (m)
-      slowdown_dist:  1.5     # start braking at this distance (m)
-      min_speed:      0.25    # slowest speed before hard stop (m/s)
+      stop_dist:      0.5
+      slowdown_dist:  3.0
+      min_speed:      0.25
 
-      # ── lateral obstacle detection ────────────────────────────────────
-      lateral_offset: 0.4    # how far left/right to probe costmap (m)
-      sample_dist:    1.0    # how far ahead to probe (m)
-      nudge_weight:   0.5    # kept for compat, not used in blend logic
+      # ── lateral lookahead obstacle detection ──────────────────────────
+      # The controller samples N slices from near → far ahead of the robot.
+      # Each slice is weighted by distance so far threats dominate →
+      # steering starts BEFORE the robot reaches the obstacle cloud.
+      lateral_offset:   0.8    # how wide left/right to probe (m)
+      sample_dist_near: 1.0    # closest slice (m)
+      sample_dist_far:  6.0    # furthest slice (m) — increase to react earlier
+      sample_slices:    6      # number of slices between near and far
+
+      nudge_weight:   0.5      # kept for compat, unused
 
       # ── A* blend ──────────────────────────────────────────────────────
-      # obstacle_blend_threshold: bias magnitude at which A* weight = 1.0
-      # Lower  → A* takes over sooner / more aggressively
-      # Higher → lane dominates longer before A* kicks in
-      # Recommended range: 0.15 – 0.40
-      obstacle_blend_threshold: 0.25
+      obstacle_blend_threshold: 0.05   # lower = reacts sooner to far obstacles
 
       # ── costmap warmup ────────────────────────────────────────────────
-      # Extra blocking sleep in activate() so costmap gets its first scan
-      # before the controller starts commanding (ms).
-      # Set to 0 to skip the sleep and rely purely on isCurrent() guard.
-      # Increase on slow hardware or if lidar takes time to start publishing.
-      costmap_warmup_ms: 500
+      costmap_warmup_ms: 3000
+      controller_frequency: 20.0 
+      
 
 local_costmap:
   local_costmap:
     ros__parameters:
       use_sim_time: True
-      update_frequency:  20.0   # higher = costmap builds faster on startup
-      publish_frequency: 10.0
+      update_frequency:  9.0
+      publish_frequency: 9.0
       global_frame: odom
       robot_base_frame: base_link
       rolling_window: true
-      width: 4
-      height: 4
+      width: 8                        
+      height: 8
       resolution: 0.05
-      always_send_full_costmap: true   # don't wait for delta on first publish
-      transform_tolerance: 0.5        # looser TF tolerance during startup
+      always_send_full_costmap: true
+      transform_tolerance: 0.5
       plugins: ["obstacle_layer", "inflation_layer"]
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
@@ -95,19 +95,22 @@ local_costmap:
           clearing: true
           marking: true
           data_type: "LaserScan"
-          raytrace_max_range: 5.0
-          obstacle_max_range: 4.0
+          raytrace_max_range: 10.0
+          obstacle_max_range: 8.0
+          observation_persistence: 1.0
+          expected_update_rate: 8.0
+          inf_is_valid: false
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        inflation_radius: 0.55
-        cost_scaling_factor: 3.0
+        inflation_radius: 1.2
+        cost_scaling_factor: 2.0
 
 global_costmap:
   global_costmap:
     ros__parameters:
       use_sim_time: True
-      update_frequency: 1.0
-      publish_frequency: 1.0
+      update_frequency: 9.0
+      publish_frequency: 9.0
       global_frame: map
       robot_base_frame: base_link
       plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
@@ -124,9 +127,12 @@ global_costmap:
           clearing: true
           marking: true
           data_type: "LaserScan"
-          raytrace_max_range: 5.0
-          obstacle_max_range: 4.0
+          raytrace_max_range: 8.0
+          obstacle_max_range: 6.0
+          observation_persistence: 0.5
+          expected_update_rate: 8.0
+          inf_is_valid: false
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        inflation_radius: 0.55
-        cost_scaling_factor: 3.0
+        inflation_radius: 4.0          # ↑ bigger bubble on global so A* routes wide
+        cost_scaling_factor: 0.9       # ↓ gentler falloff = wider avoidance arc

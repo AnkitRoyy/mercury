@@ -34,7 +34,9 @@ void StanleyController::configure(
   node->declare_parameter(plugin_name_ + ".min_speed",                min_speed_);
   node->declare_parameter(plugin_name_ + ".nudge_weight",             nudge_weight_);
   node->declare_parameter(plugin_name_ + ".lateral_offset",           lateral_offset_);
-  node->declare_parameter(plugin_name_ + ".sample_dist",              sample_dist_);
+  node->declare_parameter(plugin_name_ + ".sample_dist_near",         sample_dist_near_);
+  node->declare_parameter(plugin_name_ + ".sample_dist_far",          sample_dist_far_);
+  node->declare_parameter(plugin_name_ + ".sample_slices",            sample_slices_);
   node->declare_parameter(plugin_name_ + ".obstacle_blend_threshold", obstacle_blend_threshold_);
   node->declare_parameter(plugin_name_ + ".costmap_warmup_ms",        costmap_warmup_ms_);
 
@@ -48,7 +50,9 @@ void StanleyController::configure(
   min_speed_               = node->get_parameter(plugin_name_ + ".min_speed").as_double();
   nudge_weight_            = node->get_parameter(plugin_name_ + ".nudge_weight").as_double();
   lateral_offset_          = node->get_parameter(plugin_name_ + ".lateral_offset").as_double();
-  sample_dist_             = node->get_parameter(plugin_name_ + ".sample_dist").as_double();
+  sample_dist_near_        = node->get_parameter(plugin_name_ + ".sample_dist_near").as_double();
+  sample_dist_far_         = node->get_parameter(plugin_name_ + ".sample_dist_far").as_double();
+  sample_slices_           = node->get_parameter(plugin_name_ + ".sample_slices").as_int();
   obstacle_blend_threshold_= node->get_parameter(plugin_name_ + ".obstacle_blend_threshold").as_double();
   costmap_warmup_ms_       = node->get_parameter(plugin_name_ + ".costmap_warmup_ms").as_int();
 
@@ -60,11 +64,11 @@ void StanleyController::configure(
     "StanleyController configured — "
     "k=%.2f ks=%.2f speed=%.2f "
     "stop=%.2fm slowdown=%.2fm "
-    "nudge=%.2f lat_off=%.2fm sample=%.2fm "
+    "lat_off=%.2fm near=%.2fm far=%.2fm slices=%d "
     "blend_thresh=%.2f warmup=%dms",
     k_stanley_, k_soft_, speed_mps_,
     stop_dist_, slowdown_dist_,
-    nudge_weight_, lateral_offset_, sample_dist_,
+    lateral_offset_, sample_dist_near_, sample_dist_far_, sample_slices_,
     obstacle_blend_threshold_, costmap_warmup_ms_);
 }
 
@@ -81,9 +85,6 @@ void StanleyController::activate()
 {
   costmap_ready_ = false;
 
-  // Sleep briefly so the costmap has time to receive its first sensor update
-  // before we start commanding. This avoids the race condition where
-  // computeVelocityCommands fires before any scan has been processed.
   if (costmap_warmup_ms_ > 0) {
     RCLCPP_INFO(logger_,
       "StanleyController: waiting %dms for costmap warmup…", costmap_warmup_ms_);
@@ -108,14 +109,11 @@ void StanleyController::laneDataCallback(
   std::lock_guard<std::mutex> lock(lane_mutex_);
   cte_metres_     = msg->data[0];
   path_angle_rad_ = msg->data[1];
+  lane_width_m_   = msg->data[2];
   lane_detected_  = msg->data[3] > 0.5;
 }
 
 // ── setPlan ───────────────────────────────────────────────────────────────────
-//
-// Nav2 calls this every time A* produces a new global path.
-// We store it so computeVelocityCommands can blend it in when
-// the lane would steer the robot toward an obstacle.
 
 void StanleyController::setPlan(const nav_msgs::msg::Path & path)
 {
@@ -134,13 +132,10 @@ void StanleyController::setSpeedLimit(const double & limit, const bool & percent
 }
 
 // ── costmap ready check ───────────────────────────────────────────────────────
-//
-// Returns true once the costmap has received at least one sensor update.
-// Logs once when it first becomes ready so timing is visible in logs.
 
 bool StanleyController::isCostmapReady()
 {
-  if (costmap_ready_) return true;  // fast path once warmed up
+  if (costmap_ready_) return true;
 
   if (!costmap_ros_) return false;
 
@@ -153,18 +148,12 @@ bool StanleyController::isCostmapReady()
     return false;
   }
 
-  // First time we see it as current — log and latch
   costmap_ready_ = true;
   RCLCPP_INFO(logger_, "Costmap is now current — obstacle avoidance active");
   return true;
 }
 
 // ── A* path CTE + heading ─────────────────────────────────────────────────────
-//
-// Finds the nearest waypoint on the stored A* path, then looks ahead
-// a few steps to compute:
-//   cte           – signed lateral error (m), + = robot left of path → steer right
-//   heading_error – angle between robot heading and path tangent (rad)
 
 std::pair<double, double> StanleyController::getPathCteAndHeading(
   const geometry_msgs::msg::PoseStamped & pose)
@@ -176,7 +165,6 @@ std::pair<double, double> StanleyController::getPathCteAndHeading(
   const double robot_y   = pose.pose.position.y;
   const double robot_yaw = tf2::getYaw(pose.pose.orientation);
 
-  // ── 1. find nearest waypoint ───────────────────────────────────────────
   size_t nearest  = 0;
   double min_dist = std::numeric_limits<double>::max();
 
@@ -188,29 +176,22 @@ std::pair<double, double> StanleyController::getPathCteAndHeading(
     if (d < min_dist) { min_dist = d; nearest = i; }
   }
 
-  // ── 2. lookahead point (Stanley front-axle reference) ─────────────────
-  // +3 steps gives a small lookahead; increase if path is dense
-  const size_t lookahead_steps = 3;
+  const size_t lookahead_steps = 8;
   size_t target = std::min(nearest + lookahead_steps,
                            current_path_.poses.size() - 1);
 
   const double tx = current_path_.poses[target].pose.position.x;
   const double ty = current_path_.poses[target].pose.position.y;
 
-  // ── 3. CTE: signed lateral distance robot → lookahead point ───────────
-  //   positive → path is to the LEFT  of robot → Stanley steers right
-  //   negative → path is to the RIGHT of robot → Stanley steers left
   double dx  = tx - robot_x;
   double dy  = ty - robot_y;
   double cte = -dx * std::sin(robot_yaw) + dy * std::cos(robot_yaw);
 
-  // ── 4. heading error: path tangent minus robot yaw ────────────────────
   const double px_near = current_path_.poses[nearest].pose.position.x;
   const double py_near = current_path_.poses[nearest].pose.position.y;
   double path_yaw      = std::atan2(ty - py_near, tx - px_near);
 
   double heading_error = path_yaw - robot_yaw;
-  // normalise to [-π, π]
   while (heading_error >  M_PI) heading_error -= 2.0 * M_PI;
   while (heading_error < -M_PI) heading_error += 2.0 * M_PI;
 
@@ -218,15 +199,11 @@ std::pair<double, double> StanleyController::getPathCteAndHeading(
 }
 
 // ── forward obstacle: speed scale ────────────────────────────────────────────
-//
-// Scans costmap cells along the robot heading out to slowdown_dist_.
-// Returns 0.0 (hard stop) → 1.0 (full speed).
-// Returns 1.0 immediately if costmap is not yet ready.
 
 double StanleyController::computeObstacleSpeedScale(
   const geometry_msgs::msg::PoseStamped & pose)
 {
-  if (!isCostmapReady()) return 1.0;  // costmap not ready → full speed, no false stops
+  if (!isCostmapReady()) return 1.0;
 
   auto * costmap  = costmap_ros_->getCostmap();
   if (!costmap)   return 1.0;
@@ -259,18 +236,27 @@ double StanleyController::computeObstacleSpeedScale(
   return min_speed_ + t * (1.0 - min_speed_);
 }
 
-// ── lateral obstacle: cost bias ───────────────────────────────────────────────
+// ── lateral obstacle: lookahead cost bias ─────────────────────────────────────
 //
-// Samples two arcs (near + far) at ±lateral_offset_ left/right of heading.
-// Returns normalised bias in [-1, +1]:
-//   +1 → heavy cost on right → A* path weight increases (steer away from right)
-//   -1 → heavy cost on left  → A* path weight increases (steer away from left)
-// Returns 0.0 immediately if costmap is not yet ready.
+// KEY CHANGE vs old code:
+// Instead of sampling only at one distance (sample_dist_), we now sample
+// at N evenly-spaced slices from sample_dist_near_ → sample_dist_far_.
+//
+// Each slice is weighted proportional to its distance from the robot:
+//   weight(d) = d / sample_dist_far_
+//
+// This means:
+//   - A far obstacle (e.g. 4m ahead) contributes MORE to the bias
+//     → robot starts steering away BEFORE reaching it
+//   - A near obstacle still contributes but doesn't dominate
+//     → no sudden jerks when obstacle is already beside the robot
+//
+// The final bias is the weighted mean across all slices, normalised to [-1,+1].
 
 double StanleyController::computeLateralCostBias(
   const geometry_msgs::msg::PoseStamped & pose, double yaw)
 {
-  if (!isCostmapReady()) return 0.0;  // costmap not ready → no bias, pure lane
+  if (!isCostmapReady()) return 0.0;
 
   auto * costmap = costmap_ros_->getCostmap();
   if (!costmap)  return 0.0;
@@ -278,12 +264,17 @@ double StanleyController::computeLateralCostBias(
   double cos_yaw = std::cos(yaw);
   double sin_yaw = std::sin(yaw);
 
-  const double dist_near = sample_dist_ * 0.5;
-  const double dist_far  = sample_dist_;
-  const double w_near    = 0.4;
-  const double w_far     = 0.6;
+  // build evenly-spaced slice distances
+  const int    n     = std::max(2, sample_slices_);
+  const double d_min = sample_dist_near_;
+  const double d_max = sample_dist_far_;
+  const double step  = (d_max - d_min) / static_cast<double>(n - 1);
+
+  double weighted_bias  = 0.0;
+  double total_weight   = 0.0;
 
   auto sample_cost = [&](double dist, double lat_sign) -> double {
+    // probe point = forward dist along heading ± lateral_offset_ perpendicular
     double wx = pose.pose.position.x
                 + dist     * cos_yaw
                 - lat_sign * lateral_offset_ * sin_yaw;
@@ -295,36 +286,38 @@ double StanleyController::computeLateralCostBias(
     return static_cast<double>(costmap->getCost(mx, my));
   };
 
-  // left = lat_sign +1,  right = lat_sign -1
-  double left_cost  = w_near * sample_cost(dist_near, +1.0)
-                    + w_far  * sample_cost(dist_far,  +1.0);
-  double right_cost = w_near * sample_cost(dist_near, -1.0)
-                    + w_far  * sample_cost(dist_far,  -1.0);
+  for (int i = 0; i < n; ++i)
+  {
+    double dist = d_min + i * step;
 
-  // normalise to [-1, +1]  (max weighted cost ≈ 255)
-  double bias = (right_cost - left_cost) / 255.0;
+    // distance-proportional weight: farther slice → higher weight
+    // This is what makes the controller react BEFORE reaching the obstacle.
+    double w = dist / d_max;
+
+    double left_cost  = sample_cost(dist, +1.0);
+    double right_cost = sample_cost(dist, -1.0);
+
+    // bias for this slice: positive = obstacle on right → steer left
+    double slice_bias = (right_cost - left_cost) / 255.0;
+
+    weighted_bias += w * slice_bias;
+    total_weight  += w;
+  }
+
+  double bias = (total_weight > 1e-6) ? (weighted_bias / total_weight) : 0.0;
 
   if (std::abs(bias) > 0.05)
     RCLCPP_INFO_THROTTLE(logger_, *clock_, 300,
-      "LateralBias: left=%.0f right=%.0f bias=%+.3f  A*_weight=%.2f",
-      left_cost, right_cost, bias,
-      std::min(std::abs(bias) / obstacle_blend_threshold_, 1.0));
+      "LateralBias(lookahead): bias=%+.3f  A*_weight=%.2f  "
+      "slices=%d  near=%.1fm  far=%.1fm",
+      bias,
+      std::min(std::abs(bias) / obstacle_blend_threshold_, 1.0),
+      n, d_min, d_max);
 
   return bias;
 }
 
 // ── computeVelocityCommands ───────────────────────────────────────────────────
-//
-// Blending strategy
-// -----------------
-// obstacle_weight = clamp(|bias| / obstacle_blend_threshold, 0, 1)
-//
-//   obstacle_weight = 0  → pure lane following   (no obstacle / costmap not ready)
-//   obstacle_weight = 1  → pure A* path following (obstacle fully detected)
-//
-// While costmap is warming up the robot drives purely on lane data at full
-// speed — it will not false-stop and will not make erratic avoidance moves.
-// Once isCurrent() latches true, obstacle avoidance activates automatically.
 
 geometry_msgs::msg::TwistStamped StanleyController::computeVelocityCommands(
   const geometry_msgs::msg::PoseStamped & pose,
@@ -351,7 +344,6 @@ geometry_msgs::msg::TwistStamped StanleyController::computeVelocityCommands(
   }
 
   // ── 2. forward obstacle check ─────────────────────────────────────────
-  // Returns 1.0 (no slowdown) when costmap is not yet ready
   double scale = computeObstacleSpeedScale(pose);
   if (scale < 0.01)
   {
@@ -360,8 +352,8 @@ geometry_msgs::msg::TwistStamped StanleyController::computeVelocityCommands(
     return cmd;
   }
 
-  // ── 3. lateral obstacle bias ──────────────────────────────────────────
-  // Returns 0.0 (no bias) when costmap is not yet ready
+  // ── 3. lateral lookahead bias ─────────────────────────────────────────
+  // Returns 0.0 when costmap is not ready → pure lane driving
   double yaw  = tf2::getYaw(pose.pose.orientation);
   double bias = computeLateralCostBias(pose, yaw);
 
@@ -370,9 +362,10 @@ geometry_msgs::msg::TwistStamped StanleyController::computeVelocityCommands(
 
   // ── 5. blend lane ↔ A* based on obstacle severity ────────────────────
   //
-  // obstacle_weight ramps 0→1 as |bias| grows from 0 → obstacle_blend_threshold.
-  // At weight=1 the robot ignores the lane entirely and follows A*.
-  // When costmap is not ready, bias=0 so obstacle_weight=0 → pure lane.
+  // obstacle_weight ramps 0→1 as |bias| grows 0 → obstacle_blend_threshold_.
+  // Because bias is now computed over a lookahead arc (far slices weighted
+  // more), obstacle_weight starts rising while the obstacle is still
+  // several metres ahead — the robot steers away early.
   double obstacle_weight = std::min(
     std::abs(bias) / obstacle_blend_threshold_, 1.0);
 
@@ -388,12 +381,6 @@ geometry_msgs::msg::TwistStamped StanleyController::computeVelocityCommands(
     costmap_ready_ ? "ready" : "warming");
 
   // ── 6. Stanley law ────────────────────────────────────────────────────
-  //
-  // Sign convention (ROS REP-103):
-  //   cte > 0      → robot left of path   → steer right → angular.z < 0
-  //   path_ang > 0 → path curves left     → steer left  → angular.z > 0
-  //   angular.z > 0 = turn left
-  //
   double cte_term = std::atan2(k_stanley_ * cte, speed_mps_ + k_soft_);
   double delta    = std::clamp(
     path_ang + cte_term, -max_steer_rad_, max_steer_rad_);

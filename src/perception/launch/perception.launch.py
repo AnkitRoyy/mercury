@@ -15,6 +15,12 @@ def generate_launch_description():
     name='follower',
     output='screen'
 )
+    recorder_node  = Node(
+    package='perception',
+    executable='recorder',
+    name='recorder',
+    output='screen'
+)
 #     lane_controller_node  = Node(
 #     package='perception',
 #     executable='lane_controller',
@@ -164,6 +170,7 @@ def generate_launch_description():
     return LaunchDescription([
         use_sim_time_arg,
         follower_node,
+        # recorder_node
         # # lane_detection_node,
         # lane_costmap,
         # # lane_assist,
