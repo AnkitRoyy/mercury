@@ -6,3 +6,4 @@ digest*.txt
 venv/
 build/
 install/
+__pycache__/

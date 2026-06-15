@@ -1,15 +1,3 @@
-"""
-twist_to_stamped.py
--------------------
-Converts Twist → TwistStamped for the diff_drive_controller.
-
-CHANGE from original:
-  Now subscribes to /cmd_vel_nav (output of lane_assist_node) instead
-  of /cmd_vel directly.  The chain is:
-
-    Nav2 → /cmd_vel → lane_assist_node → /cmd_vel_nav → twist_to_stamped → /cmd_vel_stamped → hw
-"""
-
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist, TwistStamped
@@ -22,7 +10,7 @@ class TwistToStamped(Node):
 
         self.sub = self.create_subscription(
             Twist,
-            '/cmd_vel',   # ← was /cmd_vel
+            '/cmd_vel',
             self.callback,
             10
         )

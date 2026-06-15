@@ -2,7 +2,7 @@ from setuptools import find_packages, setup
 from glob import glob
 import os
 
-package_name = 'face_task'
+package_name = 'turret_vision'
 
 setup(
     name=package_name,
@@ -14,22 +14,22 @@ setup(
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'),
          glob('launch/*.launch.py')),
+        (os.path.join('share', package_name, 'config'),
+         glob('config/*.yaml')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='dev',
     maintainer_email='dev@todo.todo',
-    description='WP-2 face detection pipeline for Mercury UGVC',
+    description='Turret-mounted face recognition for Mercury UGVC',
     license='MIT',
     extras_require={'test': ['pytest']},
     entry_points={
         'console_scripts': [
-            'face_recognition       = face_task.face_recognition_node:main',
-            'face_task              = face_task.face_task_node:main',
-            'turret_controller      = face_task.turret_controller_node:main',
-            'turret_gazebo_bridge   = face_task.turret_gazebo_bridge_node:main', 
-            'face_task_trigger      = face_task.face_task_trigger_node:main',
-            'sim_waypoint_nav       = face_task.sim_waypoint_nav_node:main',
+            'recognition = turret_vision.recognition:main',
+            'scanner = turret_vision.scanner:main',
+            'turret = turret_vision.turret:main',
+            'trigger = turret_vision.trigger:main',
         ],
     },
 )
