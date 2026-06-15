@@ -1,4 +1,3 @@
-```markdown
 # mercury
 
 Official repository for ICMTC UGVC-2026
@@ -293,4 +292,3 @@ src/
 ├── simulation/        # Gazebo world and models
 ├── turret_vision/     # Face detection + turret control
 └── watchdog_monitor/  # System monitoring + waypoints
-```
