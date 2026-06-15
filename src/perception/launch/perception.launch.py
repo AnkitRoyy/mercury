@@ -49,11 +49,11 @@ def generate_launch_description():
             'use_sim_time':   True,
 
             # Map extent — must match global_costmap.yaml
-            'map_width_m':    70.0,
-            'map_height_m':   70.0,
+            'map_width_m':    150.0,
+            'map_height_m':   150.0,
             'resolution':      0.10,
-            'map_origin_x':  -35.0,
-            'map_origin_y':  -35.0,
+            'map_origin_x':  -75.0,
+            'map_origin_y':  -75.0,
 
             # Camera
             'camera_hfov':   1.047,
@@ -119,11 +119,11 @@ def generate_launch_description():
         parameters=[{
             'use_sim_time':          True,
             # Map extent — must match global_costmap.yaml
-            'map_width_m':           70.0,
-            'map_height_m':          70.0,
+            'map_width_m':           150.0,
+            'map_height_m':          150.0,
             'resolution':             0.10,
-            'map_origin_x':         -35.0,
-            'map_origin_y':         -35.0,
+            'map_origin_x':         -75.0,
+            'map_origin_y':         -75.0,
             # Camera
             'camera_hfov':           1.047,
             'image_width':           640,

@@ -34,7 +34,7 @@
     <include>
       <uri>model://ugvc_track</uri>
       <name>ugvc_track</name>
-      <pose>-55 0 0.01 1.5708 0 0</pose>
+      <pose>0 0 0.01 1.5708 0 0</pose>
     </include>
 
     <spherical_coordinates>

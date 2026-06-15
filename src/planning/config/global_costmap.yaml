@@ -19,11 +19,11 @@ global_costmap:
       # causes the costmap to oscillate between sizes, aborting all goals.
       # SLAM is used for LOCALIZATION only (EKF + slam_toolbox).
       # Navigable space is defined by lane_layer (road boundaries).
-      width:      70
-      height:     70
+      width:      150
+      height:     150
       resolution: 0.10
-      origin_x:  -35.0
-      origin_y:  -35.0
+      origin_x:  -75.0
+      origin_y:  -75.0
 
       footprint: "[[0.25, 0.20], [0.25, -0.20], [-0.25, -0.20], [-0.25, 0.20]]"
       footprint_padding: 0.02
