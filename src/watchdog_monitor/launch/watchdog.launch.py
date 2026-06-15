@@ -1,54 +1,96 @@
+"""
+watchdog.launch.py
+==================
+Single launch file for all monitoring nodes.
+
+Launches:
+  health     - System health monitoring + watchdog alerts (merged)
+  waypoints  - Waypoint detection and events
+  dashboard  - Terminal UI (optional, enabled with dashboard:=true)
+
+Usage:
+  # Full monitoring stack
+  ros2 launch watchdog_monitor watchdog.launch.py
+
+  # With dashboard
+  ros2 launch watchdog_monitor watchdog.launch.py dashboard:=true
+
+  # With custom params
+  ros2 launch watchdog_monitor watchdog.launch.py params_file:=/path/to/params.yaml
+"""
+
 from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
-from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration
+from launch_ros.substitutions import FindPackageShare
+from launch.conditions import IfCondition
 
 
-def generate_launch_description():
+def generate_launch_description() -> LaunchDescription:
 
-    declare_check_interval_arg = DeclareLaunchArgument(
-        'check_interval',
-        default_value='3.0',
-        description='Seconds between each watchdog check cycle'
-    )
-    declare_topic_timeout_arg = DeclareLaunchArgument(
-        'topic_timeout',
-        default_value='5.0',
-        description='Seconds of silence before a topic is flagged as inactive'
+    # ── Arguments ──────────────────────────────────────────────────────────
+    params_arg = DeclareLaunchArgument(
+        'params_file',
+        default_value=PathJoinSubstitution([
+            FindPackageShare('watchdog_monitor'), 'config', 'watchdog_params.yaml'
+        ]),
+        description='Path to parameters YAML file'
     )
 
-    watchdog_node = Node(
+    dashboard_arg = DeclareLaunchArgument(
+        'dashboard',
+        default_value='false',
+        description='Launch terminal dashboard'
+    )
+
+    use_sim_time_arg = DeclareLaunchArgument(
+        'use_sim_time',
+        default_value='true',
+        description='Use simulation time'
+    )
+
+    # ── Nodes ──────────────────────────────────────────────────────────────
+    # Health monitoring (merged system_monitor + watchdog)
+    health_node = Node(
         package='watchdog_monitor',
-        executable='watchdog_node',
-        name='watchdog_node',
+        executable='health',
+        name='health',
         output='screen',
-        parameters=[{
-            'check_interval': LaunchConfiguration('check_interval'),
-            'topic_timeout': LaunchConfiguration('topic_timeout'),
-            'critical_nodes': [
-                '/robot_state_publisher',
-                '/ekf_filter_node',
-                '/slam_toolbox',
-                '/lifecycle_manager_localization',
-                '/planner_server',
-                '/controller_server',
-                '/bt_navigator',
-                '/behavior_server',
-                '/lifecycle_manager_navigation',
-                '/diff_drive_controller',
-                '/joint_state_broadcaster',
-                '/lane_costmap',
-            ],
-            'tf_pairs': [
-                'odom->base_link',
-                'map->odom',
-                'base_link->laser',
-            ],
-        }]
+        parameters=[LaunchConfiguration('params_file'), {
+            'use_sim_time': LaunchConfiguration('use_sim_time')
+        }],
+    )
+
+    # Waypoint detection
+    waypoints_node = Node(
+        package='watchdog_monitor',
+        executable='waypoints',
+        name='waypoints',
+        output='screen',
+        parameters=[LaunchConfiguration('params_file'), {
+            'use_sim_time': LaunchConfiguration('use_sim_time')
+        }],
+    )
+
+    # Dashboard (optional - uses IfCondition)
+    dashboard_node = Node(
+        package='watchdog_monitor',
+        executable='dashboard',
+        name='dashboard',
+        output='screen',
+        condition=IfCondition(LaunchConfiguration('dashboard')),
+        parameters=[LaunchConfiguration('params_file'), {
+            'use_sim_time': LaunchConfiguration('use_sim_time')
+        }],
+        emulate_tty=True,
     )
 
     return LaunchDescription([
-        declare_check_interval_arg,
-        declare_topic_timeout_arg,
-        watchdog_node,
+        params_arg,
+        dashboard_arg,
+        use_sim_time_arg,
+        health_node,
+        waypoints_node,
+        dashboard_node,
     ])

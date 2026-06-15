@@ -18,10 +18,8 @@ def generate_launch_description():
         'worlds',
         'mercury.sdf'
     )
-    # Build photo model blocks dynamically with correct absolute paths
     images_dir = os.path.join(pkg_sim, 'models', 'images')
 
-    # Read the world SDF and inject the correct image paths
     import re
     with open(world_file, 'r') as f:
         world_content = f.read()
@@ -32,7 +30,6 @@ def generate_launch_description():
             f'file://{images_dir}/photo{i}.jpg'
         )
 
-    # Write to a temp file
     import tempfile
     tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.sdf', delete=False)
     tmp.write(world_content)

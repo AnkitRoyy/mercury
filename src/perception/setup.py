@@ -30,14 +30,9 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            # old costmap node (kept but not launched by default anymore)
-            'calibrate_homography = perception.calibrate_homography:main',
-            # NEW: lightweight detection node that feeds lane_assist_node
             'lane_detection = perception.lane_detection:main',
             'lane_costmap = perception.lane_costmap_node:main',
-            'lane_assist_node = perception.lane_assist_node:main',
             'pothole_costmap = perception.pothole_costmap_node:main',
-            'carrot_goal = perception.carrot_goal_node:main',
             'lane_bev_carrot = perception.lane_bev_carrot_node:main',
         ],
     },
