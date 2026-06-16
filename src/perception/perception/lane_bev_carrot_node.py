@@ -67,6 +67,7 @@ class LaneBevCarrotNode(Node):
         self.declare_parameter('min_clear_m',             0.6)
         self.declare_parameter('safety_radius',           0.30)
         self.declare_parameter('max_carrot_dist_m',       4.0)
+        
 
         # ── NEW: fallback parameters ───────────────────────────────────────────
         # Lateral sweep: distances and offsets tried when BEV carrot fails
@@ -99,6 +100,9 @@ class LaneBevCarrotNode(Node):
         self._fx = (img_w/2.0)/math.tan(hfov/2.0)
         self._cx = img_w/2.0
         self._cy = img_h/2.0
+
+        self._pothole_grid = None
+        self._pothole_info = None
 
         pkg = get_package_share_directory('perception')
         def _load(n): return json.load(open(os.path.join(pkg,'config',n)))
@@ -157,6 +161,7 @@ class LaneBevCarrotNode(Node):
         self.create_subscription(Image,        '/camera/image_raw',             self._img_cb,     sq)
         self.create_subscription(OccupancyGrid,'/perception/road_costmap',      self._road_cb,    lq)
         self.create_subscription(LaserScan,    '/scan',                         self._scan_cb,    sq)
+        self.create_subscription(OccupancyGrid, '/perception/pothole_costmap', self._pothole_cb, lq)
 
         self._pub = self.create_publisher(PoseStamped, '/goal_pose', 10)
         self.create_timer(1.0/rate, self._tick)
@@ -189,6 +194,10 @@ class LaneBevCarrotNode(Node):
     def _road_cb(self, msg: OccupancyGrid):
         self._road_info = msg.info
         self._road_grid = msg.data
+    
+    def _pothole_cb(self, msg: OccupancyGrid):
+        self._pothole_info = msg.info
+        self._pothole_grid = msg.data
 
     def _scan_cb(self, msg: LaserScan):
         """Convert scan to map-frame point cloud and cache it."""
@@ -223,6 +232,14 @@ class LaneBevCarrotNode(Node):
         row = int((wy - info.origin.position.y) / info.resolution)
         if not (0 <= col < info.width and 0 <= row < info.height): return -1
         return int(self._road_grid[row * info.width + col])
+    
+    def _pothole_cost(self, wx, wy) -> int:
+        if self._pothole_grid is None: return -1
+        info = self._pothole_info
+        col = int((wx - info.origin.position.x) / info.resolution)
+        row = int((wy - info.origin.position.y) / info.resolution)
+        if not (0 <= col < info.width and 0 <= row < info.height): return -1
+        return int(self._pothole_grid[row * info.width + col])
 
     def _is_safe(self, wx, wy) -> bool:
         check_pts = [(wx, wy)]
@@ -234,6 +251,19 @@ class LaneBevCarrotNode(Node):
             c = self._road_cost(px, py)
             if c != -1 and c >= self._safe_cost_max:
                 return False
+            
+        # --- POTHOLE CHECK (larger radius — hard avoidance) ---
+        pothole_r = 0.9  # metres — carrot must stay this far from any pothole cell
+        for deg in range(0, 360, 30):
+            a = math.radians(deg)
+            pc = self._pothole_cost(wx + pothole_r * math.cos(a),
+                                    wy + pothole_r * math.sin(a))
+            if pc != -1 and pc >= 50:
+                return False
+        if self._pothole_cost(wx, wy) >= 50:
+            return False
+        # ------------------------------------------------------
+        
         if self._scan_pts_map is not None and len(self._scan_pts_map) > 0:
             dists = np.hypot(self._scan_pts_map[:, 0] - wx,
                              self._scan_pts_map[:, 1] - wy)

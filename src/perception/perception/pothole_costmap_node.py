@@ -1,5 +1,5 @@
 """
-pothole_costmap_node.py  (v1)
+pothole_costmap_node.py  (v2 — ID-based tracking)
 ------------------------------
 Detects pothole blobs from the camera image, projects them onto the
 ground plane, and publishes a PERSISTENT OccupancyGrid on
@@ -30,6 +30,15 @@ RADIUS ESTIMATION (automatic, size-agnostic):
     4. Clamp to [min_pothole_r, max_pothole_r] for safety
     5. Add inflation_pad on top
   This adapts automatically to any pothole size — no hardcoded dimensions.
+
+ID-BASED DEDUP (v2):
+  Each physical pothole gets a permanent integer ID the FIRST time it's
+  detected. The costmap circle is drawn ONCE, at that moment. On every
+  subsequent detection, the new ground-projected position is matched
+  against existing IDs (nearest within dedup_radius_m). If a match is
+  found, the detection is simply ignored — no re-marking, no log spam,
+  no risk of the costmap "growing" a blob as the robot approaches and
+  re-projects the same pothole to slightly different coordinates.
 
 PERSISTENCE:
   No decay. Cells written once stay for the entire run.
@@ -128,6 +137,12 @@ class PotholeCostmapNode(Node):
         # Skip every N frames (CPU saving — potholes are static)
         self.declare_parameter('process_every_n', 5)
 
+        # Max distance (m) for a new detection to be considered the SAME
+        # physical pothole as an already-tracked ID. Set generous enough to
+        # absorb projection drift as the robot's viewing angle/distance changes.
+        self.declare_parameter('dedup_radius_m', 1.0)
+        self.declare_parameter('edge_margin_px', 8)
+
         # ── Read ─────────────────────────────────────────────────────────────
         def _p(n): return self.get_parameter(n).value
 
@@ -154,6 +169,8 @@ class PotholeCostmapNode(Node):
         self._inflation_pad  = float(_p('inflation_pad'))
         self._radius_samples = int(_p('radius_samples'))
         self._skip_n         = int(_p('process_every_n'))
+        self._dedup_radius_m = float(_p('dedup_radius_m'))
+        self._edge_margin = int(_p('edge_margin_px'))
 
         # ── Derived ──────────────────────────────────────────────────────────
         self._grid_w = int(round(map_w_m  / self._res))
@@ -166,7 +183,11 @@ class PotholeCostmapNode(Node):
         # Persistent grid — never decays
         self._grid = np.full(self._grid_w * self._grid_h, -1, dtype=np.int8)
 
-        # Track which map cells have been marked — for logging
+        # ── ID-based pothole tracking ────────────────────────────────────────
+        # id -> (cx_m, cy_m).  Assigned once, permanent for the run.
+        # A pothole only ever gets ONE entry here and ONE costmap mark.
+        self._potholes = {}
+        self._next_pothole_id = 0
         self._pothole_count = 0
         self._frame_count   = 0
 
@@ -197,11 +218,12 @@ class PotholeCostmapNode(Node):
         self.create_timer(1.0 / rate, self._publish_costmap)
 
         self.get_logger().info(
-            f'PotholeCostmapNode v1 | '
+            f'PotholeCostmapNode v2 (ID-based) | '
             f'grid={self._grid_w}×{self._grid_h} @ {self._res}m/cell | '
             f'blob_min_circ={self._blob_min_circ} | '
             f'blob_max_aspect={self._blob_max_asp} | '
             f'r=[{self._min_r},{self._max_r}]m + pad={self._inflation_pad}m | '
+            f'dedup_radius={self._dedup_radius_m}m | '
             f'PERSISTENT (no decay)')
 
     # ═══════════════════════════════════════════════════════════════════
@@ -222,6 +244,7 @@ class PotholeCostmapNode(Node):
         fh, fw = frame.shape[:2]
         roi_y  = int(fh * self._roi_top)
         roi    = frame[roi_y:fh, :]
+        roi_h, roi_w = roi.shape[:2]
 
         # ── White pixel mask ─────────────────────────────────────────────────
         hsv  = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
@@ -245,6 +268,13 @@ class PotholeCostmapNode(Node):
         for cnt in contours:
             area = cv2.contourArea(cnt)
             if area < self._blob_min_area:
+                continue
+
+            # Reject blobs clipped by the frame/ROI edge — partial view means
+            # untrustworthy centroid/radius/shape. Wait until fully visible.
+            bx, by, bw, bh = cv2.boundingRect(cnt)
+            m = self._edge_margin
+            if bx <= m or by <= m or bx + bw >= roi_w - m or by + bh >= roi_h - m:
                 continue
 
             perimeter = cv2.arcLength(cnt, closed=True)
@@ -350,6 +380,16 @@ class PotholeCostmapNode(Node):
         return marked
 
     # ═══════════════════════════════════════════════════════════════════
+    # ID matching — find an existing tracked pothole near (cx_m, cy_m)
+    # ═══════════════════════════════════════════════════════════════════
+
+    def _find_matching_id(self, cx_m, cy_m):
+        for pid, (px, py) in self._potholes.items():
+            if math.hypot(cx_m - px, cy_m - py) < self._dedup_radius_m:
+                return pid
+        return None
+
+    # ═══════════════════════════════════════════════════════════════════
     # Image callback
     # ═══════════════════════════════════════════════════════════════════
 
@@ -405,7 +445,11 @@ class PotholeCostmapNode(Node):
 
             cx_m, cy_m = center_gnd
 
-            # ── Estimate radius from contour projections ──────────────────────
+            # ── Already tracked? Skip entirely — no re-mark, no log ───────────
+            if self._find_matching_id(cx_m, cy_m) is not None:
+                continue
+
+            # ── New pothole — estimate radius from contour projections ────────
             projected_dists = []
             for (u, v) in ph['contour_uvs']:
                 gnd = self._pixel_to_ground(
@@ -426,23 +470,21 @@ class PotholeCostmapNode(Node):
             r_final = float(np.clip(r_estimated, self._min_r, self._max_r))
             r_final += self._inflation_pad
 
-            # ── Skip if already marked ────────────────────────────────────────
-            cx_cell = int((cx_m - self._origin_x) / self._res)
-            cy_cell = int((cy_m - self._origin_y) / self._res)
-            if (0 <= cx_cell < self._grid_w and 0 <= cy_cell < self._grid_h
-                    and self._grid[cy_cell * self._grid_w + cx_cell] == 100):
-                continue
+            # ── Assign permanent ID, mark on persistent grid ONE TIME ──────────
+            pothole_id = self._next_pothole_id
+            self._next_pothole_id += 1
+            self._potholes[pothole_id] = (cx_m, cy_m)
 
-            # ── Mark on persistent grid ───────────────────────────────────────
             cells_marked = self._mark_circle(cx_m, cy_m, r_final)
             self._pothole_count += 1
 
             self.get_logger().info(
-                f'[Pothole] #{self._pothole_count} detected → '
+                f'[Pothole] ID{pothole_id} detected → '
                 f'map=({cx_m:.2f}, {cy_m:.2f})  '
                 f'r_est={r_estimated:.2f}m  r_final={r_final:.2f}m  '
                 f'cells={cells_marked}  '
-                f'circ={ph["circularity"]:.3f}  aspect={ph["aspect"]:.2f}')
+                f'circ={ph["circularity"]:.3f}  aspect={ph["aspect"]:.2f}  '
+                f'total_unique={len(self._potholes)}')
 
     # ═══════════════════════════════════════════════════════════════════
     # Publish persistent costmap
