@@ -102,7 +102,6 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'use_sim_time':          True,
-            # Map extent — must match global_costmap.yaml
             'map_width_m':           150.0,
             'map_height_m':          150.0,
             'resolution':             0.10,
@@ -118,11 +117,11 @@ def generate_launch_description():
             'white_s_max':            80,
             'blob_min_area':         400,
             'blob_min_circularity':  0.40,
-            'blob_max_aspect':       3.3,
+            'blob_max_aspect':       2.8,
             # World-space pothole size
             'min_pothole_r':         0.20,
             'max_pothole_r':         1.0,
-            'inflation_pad':         0.0,
+            'inflation_pad':         0.1,
             'radius_samples':        12,
             # Performance
             'publish_rate':          2.0,
