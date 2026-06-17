@@ -1,0 +1,21 @@
+navsat_transform_node:
+  ros__parameters:
+    use_sim_time: true
+
+    frequency: 10.0
+    delay: 3.0
+
+    # Datum matches mercury.sdf spherical_coordinates
+    wait_for_datum: true
+    datum: [30.0444, 31.2357, 0.0]
+
+    magnetic_declination_radians: 0.0
+    yaw_offset: 0.0          # 0 = robot X aligns with geographic East
+    zero_altitude: true      # ignore Z from GPS
+
+    broadcast_utm_transform: false
+    broadcast_utm_transform_as_parent_frame: false
+    publish_filtered_gps: false
+
+    use_odometry_yaw: false  # use IMU heading (not odom, to avoid circular dependency)
+    use_local_cartesian: false
