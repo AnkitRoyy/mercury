@@ -74,6 +74,7 @@ class WaypointsNode(Node):
         # ── Parameters ────────────────────────────────────────────────────────
         self.declare_parameter('spawn_x', 0.0)
         self.declare_parameter('spawn_y', 0.0)
+        self.declare_parameter('spawn_yaw', 0.0)
         self.declare_parameter(
             'waypoints',
             Parameter.Type.DOUBLE_ARRAY
@@ -134,9 +135,15 @@ class WaypointsNode(Node):
         self.get_logger().info('Waypoints node ready')
 
     def _odom_cb(self, msg: Odometry):
-        # Odometry is relative to spawn (0,0 at boot). Add spawn offset for world coords.
-        self._robot_x = self.get_parameter('spawn_x').value + msg.pose.pose.position.x
-        self._robot_y = self.get_parameter('spawn_y').value + msg.pose.pose.position.y
+        # Odom frame origin = spawn pose; odom axes are rotated by spawn_yaw.
+        # Must rotate odom-frame delta into world frame before adding spawn offset.
+        ox = msg.pose.pose.position.x
+        oy = msg.pose.pose.position.y
+        yaw = self.get_parameter('spawn_yaw').value
+        wx = ox * math.cos(yaw) - oy * math.sin(yaw)
+        wy = ox * math.sin(yaw) + oy * math.cos(yaw)
+        self._robot_x = self.get_parameter('spawn_x').value + wx
+        self._robot_y = self.get_parameter('spawn_y').value + wy
         self._pose_received = True
 
     def _detection_loop(self):
