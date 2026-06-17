@@ -16,6 +16,23 @@
         <always_on>true</always_on>
         <update_rate>5</update_rate>
         <topic>/gps</topic>
+        <gz_frame_id>gps_link</gz_frame_id>
+        <navsat>
+          <position_sensing>
+            <horizontal>
+              <noise type="gaussian">
+                <mean>0</mean>
+                <stddev>0.000005</stddev>
+              </noise>
+            </horizontal>
+            <vertical>
+              <noise type="gaussian">
+                <mean>0</mean>
+                <stddev>0.000005</stddev>
+              </noise>
+            </vertical>
+          </position_sensing>
+        </navsat>
       </sensor>
     </gazebo>
 

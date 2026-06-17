@@ -28,3 +28,10 @@ ekf_filter_node:
                   false, false, false]
 
     imu0_remove_gravitational_acceleration: true
+
+    odom1: /odometry/gps
+    odom1_config: [true, true, false,
+                   false, false, false,
+                   false, false, false,
+                   false, false, false,
+                   false, false, false]

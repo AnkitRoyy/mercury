@@ -40,6 +40,8 @@ setup(
     },
     entry_points={
         'console_scripts': [
+            'gps_relay = simulation.gps_relay:main',
+            'localization_diagnostics = simulation.localization_diagnostics:main',
         ],
     },
 )
