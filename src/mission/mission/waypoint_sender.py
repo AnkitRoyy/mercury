@@ -5,7 +5,7 @@ import yaml
 
 import rclpy
 from rclpy.node import Node
-
+from std_msgs.msg import Bool
 from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import String
 
@@ -56,6 +56,11 @@ class WaypointSender(Node):
         self.get_logger().info(
             f"Loaded {len(self.waypoints)} waypoints"
         )
+
+        self.done_received = False
+        self.waiting_for_done = False
+
+        self.create_subscription(Bool, '/done', self._done_cb, 10)
 
     def load_waypoints(self):
 
@@ -206,8 +211,19 @@ class WaypointSender(Node):
         self.current_index += 1
         self.waiting_for_reach = False
 
-        self.send_current_waypoint()
+        if expected_name == 'WP-2':
+            self.get_logger().info('WP-2 reached — waiting for face task (/done) before proceeding.')
+            self.waiting_for_done = True
+            # Do NOT call send_current_waypoint() here
+        else:
+            self.send_current_waypoint()
 
+    def _done_cb(self, msg: Bool):
+        if self.waiting_for_done and msg.data:
+            self.done_received = True
+            self.waiting_for_done = False
+            self.get_logger().info('Face task done. Sending next waypoint.')
+            self.send_current_waypoint()
 
 def main(args=None):
 
