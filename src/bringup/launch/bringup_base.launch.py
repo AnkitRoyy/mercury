@@ -4,9 +4,13 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.substitutions import FindPackageShare
 from launch.substitutions import PathJoinSubstitution, LaunchConfiguration
 from launch_ros.actions import Node
+from ament_index_python.packages import get_package_share_directory
+import os
 
 
 def generate_launch_description():
+
+    pkg_bringup = get_package_share_directory('bringup')
 
     declare_xacro_file_arg = DeclareLaunchArgument(
         'xacro_file',
@@ -77,6 +81,16 @@ def generate_launch_description():
             'safe_cost_max': 50,
             'safety_radius':         0.6,
             'max_carrot_dist_m': 6.0,
+            # ── Recovery parameters ──
+            'stuck_disp_threshold_m':   0.05,
+            'stuck_confirm_secs':       3.0,
+            'stuck_hard_secs':          6.0,
+            'stuck_streak_threshold':   5,
+            'recovery_backup_speed':    0.15,
+            'recovery_rotate_speed':    0.4,
+            'recovery_nav2_halt_delay': 0.5,
+            'forward_lidar_arc_deg':    30.0,
+            'forward_lidar_clear_m':    0.4,
         }]
     )
 

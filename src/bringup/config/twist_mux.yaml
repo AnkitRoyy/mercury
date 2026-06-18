@@ -1,0 +1,22 @@
+# twist_mux configuration for Mercury UGV
+# ─────────────────────────────────────────
+# Priority ordering (higher = wins):
+#   nav2 (10)       — normal navigation from controller_server
+#   recovery (100)  — stuck recovery from lane_bev_carrot_node
+#   teleop (200)    — manual override (future / debug)
+#
+# Output topic: /cmd_vel → twist_to_stamped → /cmd_vel_stamped → diff_drive_controller
+
+twist_mux:
+  ros__parameters:
+    use_sim_time: True
+
+    topics:
+      nav2:
+        topic: /cmd_vel_nav
+        timeout: 0.5
+        priority: 10
+      recovery:
+        topic: /cmd_vel_recovery
+        timeout: 0.5
+        priority: 100

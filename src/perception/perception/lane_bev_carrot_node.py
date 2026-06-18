@@ -1,29 +1,20 @@
 """
-lane_bev_carrot_node.py  v5
+lane_bev_carrot_node.py  v6
 ---------------------------
-CHANGELOG vs v4
+CHANGELOG vs v5
 ---------------
-* Removed _publish_stop() — it published robot odom coords with frame_id='map',
-  causing nav goals to land at wrong map positions (the "random ass" destinations
-  visible in logs as 17.x goals when robot is at 23.x).
+* Added stuck detection (two-signal: position displacement + BEV streak / LiDAR block)
+* Added 3-level recovery state machine (costmap clear → backup → backup+rotate)
+* Publishes recovery cmd_vel to /cmd_vel_recovery (twist_mux priority 100)
+* Cancels Nav2 /navigate_to_pose action goal on recovery entry
+* Publishes /system_alerts on recovery failure
 
-* Added _fallback_carrot(fwd) — when BEV lane fit finds no safe carrot, sweeps
-  a grid of points directly ahead at varying distances and lateral offsets,
-  returning the first that passes _is_safe().
-
-* Added _straight_ahead_carrot(dist) — unconditional last resort: place the
-  carrot dist metres ahead along the robot's current heading.  No safety check.
-  This guarantees the robot always has somewhere to go and never stops dead.
-
-* _tick() fallback chain:
-    BEV lane fit carrot  →  lateral sweep fallback  →  straight-ahead crawl
-
-Safety: TWO independent obstacle checks per candidate (unchanged from v4):
-  1. road_costmap  (/perception/road_costmap, map frame, 5 Hz)
-  2. LaserScan     (/scan, real-time)
+Previous (v5):
+* _tick() fallback chain: BEV lane fit → lateral sweep → straight-ahead crawl
+* TWO independent obstacle checks per candidate: road_costmap + LaserScan
 """
 
-import math, json, os
+import math, json, os, time as _time
 import numpy as np
 import cv2
 import rclpy, rclpy.duration, rclpy.time, rclpy.qos
@@ -31,8 +22,11 @@ from rclpy.node import Node
 import tf2_ros
 from cv_bridge import CvBridge
 from sensor_msgs.msg import Image, LaserScan
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, Twist
 from nav_msgs.msg import Odometry, OccupancyGrid
+from std_msgs.msg import String
+from action_msgs.srv import CancelGoal
+from std_srvs.srv import Empty
 from ament_index_python.packages import get_package_share_directory
 import tf_transformations
 
@@ -70,11 +64,20 @@ class LaneBevCarrotNode(Node):
         
 
         # ── NEW: fallback parameters ───────────────────────────────────────────
-        # Lateral sweep: distances and offsets tried when BEV carrot fails
         self.declare_parameter('fallback_dists_m',    [1.0, 0.75, 1.5])
         self.declare_parameter('fallback_laterals_m', [0.0, -0.3, 0.3, -0.6, 0.6])
-        # Straight-ahead crawl distance when even lateral sweep fails
         self.declare_parameter('straight_ahead_dist_m', 0.75)
+
+        # ── Recovery parameters ────────────────────────────────────────────────
+        self.declare_parameter('stuck_disp_threshold_m',   0.05)
+        self.declare_parameter('stuck_confirm_secs',       3.0)
+        self.declare_parameter('stuck_hard_secs',          6.0)
+        self.declare_parameter('stuck_streak_threshold',   5)
+        self.declare_parameter('recovery_backup_speed',    0.15)
+        self.declare_parameter('recovery_rotate_speed',    0.4)
+        self.declare_parameter('recovery_nav2_halt_delay', 0.5)
+        self.declare_parameter('forward_lidar_arc_deg',    30.0)
+        self.declare_parameter('forward_lidar_clear_m',    0.4)
 
         p = lambda n: self.get_parameter(n).value
         self._carrot_dist     = float(p('carrot_dist_m'))
@@ -96,6 +99,17 @@ class LaneBevCarrotNode(Node):
         self._fallback_dists    = list(p('fallback_dists_m'))
         self._fallback_laterals = list(p('fallback_laterals_m'))
         self._straight_dist     = float(p('straight_ahead_dist_m'))
+
+        # Recovery params
+        self._stuck_disp_thr    = float(p('stuck_disp_threshold_m'))
+        self._stuck_confirm_s   = float(p('stuck_confirm_secs'))
+        self._stuck_hard_s      = float(p('stuck_hard_secs'))
+        self._stuck_streak_thr  = int(p('stuck_streak_threshold'))
+        self._rec_backup_spd    = float(p('recovery_backup_speed'))
+        self._rec_rotate_spd    = float(p('recovery_rotate_speed'))
+        self._rec_halt_delay    = float(p('recovery_nav2_halt_delay'))
+        self._fwd_arc_deg       = float(p('forward_lidar_arc_deg'))
+        self._fwd_clear_m       = float(p('forward_lidar_clear_m'))
 
         self._fx = (img_w/2.0)/math.tan(hfov/2.0)
         self._cx = img_w/2.0
@@ -133,8 +147,6 @@ class LaneBevCarrotNode(Node):
         self._last_fit        = None
         self._last_fit_stamp  = None
         self._streak          = 0
-        # Finish-line gate: unit vector (robot→goal at goal-set time), map frame.
-        # Computed lazily on first tick after a new goal arrives.
         self._approach_dir: tuple | None = None   # (dx, dy) unit vec
 
         # road costmap
@@ -143,6 +155,18 @@ class LaneBevCarrotNode(Node):
 
         # laser scan points in map frame
         self._scan_pts_map: np.ndarray | None = None
+        self._last_scan_stamp: float = 0.0       # monotonic time of last scan
+        self._last_scan_msg: LaserScan | None = None  # raw scan for forward arc check
+
+        # ── Recovery state ─────────────────────────────────────────────────
+        self._recovery_active      = False
+        self._recovery_state       = 'NORMAL'    # NORMAL|CONFIRMING|LEVEL_1|LEVEL_2|LEVEL_3|FAILED
+        self._recovery_level       = 0
+        self._stuck_timer_start    = None         # monotonic time when stuck first detected
+        self._pos_history: list    = []           # [(x, y, mono_time), ...]
+        self._recovery_step_start  = None         # monotonic time for current recovery action
+        self._recovery_sub_step    = 0            # sub-step within a level
+        self._pre_recovery_pos     = None         # (x, y) at recovery entry for success check
 
         self._tf_buf = tf2_ros.Buffer()
         self._tf_lis = tf2_ros.TransformListener(self._tf_buf, self)
@@ -164,12 +188,23 @@ class LaneBevCarrotNode(Node):
         self.create_subscription(OccupancyGrid, '/perception/pothole_costmap', self._pothole_cb, lq)
 
         self._pub = self.create_publisher(PoseStamped, '/goal_pose', 10)
+
+        # ── Recovery publishers / clients ──────────────────────────────────
+        # Recovery publishes directly to /cmd_vel. Safety ensured by
+        # cancelling Nav2 action goal on entry — controller_server stops
+        # its control loop on cancel, so no cmd_vel conflict.
+        self._recovery_cmd_pub = self.create_publisher(Twist, '/cmd_vel', 10)
+        self._alert_pub = self.create_publisher(String, '/system_alerts', 10)
+        self._cancel_nav2_cli = self.create_client(
+            CancelGoal, '/navigate_to_pose/_action/cancel_goal')
+        self._clear_local_costmap_cli = self.create_client(
+            Empty, '/local_costmap/clear_entirely_local_costmap')
+
         self.create_timer(1.0/rate, self._tick)
         self.get_logger().info(
-            f'LaneBevCarrotNode v5 | safe_cost={self._safe_cost_max} '
+            f'LaneBevCarrotNode v6 | safe_cost={self._safe_cost_max} '
             f'min_clear={self._min_clear_m}m | '
-            f'fallback_dists={self._fallback_dists} '
-            f'straight_ahead={self._straight_dist}m')
+            f'recovery enabled (3-level, action-cancel)')
 
     # ── callbacks ──────────────────────────────────────────────────────
 
@@ -179,6 +214,17 @@ class LaneBevCarrotNode(Node):
         self._carrot_locked = False
         self._locked_carrot = None
         self._approach_dir  = None   # recomputed on first tick
+        # Reset recovery on new goal
+        if self._recovery_active:
+            self._publish_zero_recovery()
+        self._recovery_active    = False
+        self._recovery_state     = 'NORMAL'
+        self._recovery_level     = 0
+        self._stuck_timer_start  = None
+        self._pos_history.clear()
+        self._recovery_step_start = None
+        self._recovery_sub_step  = 0
+        self._pre_recovery_pos   = None
 
     def _odom_cb(self, msg):
         self._robot_x = msg.pose.pose.position.x
@@ -222,6 +268,8 @@ class LaneBevCarrotNode(Node):
             angle += msg.angle_increment
 
         self._scan_pts_map = np.array(pts, dtype=np.float64) if pts else None
+        self._last_scan_stamp = _time.monotonic()
+        self._last_scan_msg = msg
 
     # ── safety checks ──────────────────────────────────────────────────
 
@@ -356,6 +404,13 @@ class LaneBevCarrotNode(Node):
     def _tick(self):
         if self._final_goal is None or self._last_img is None:
             return
+
+        self._update_stuck_detection()   # always runs
+
+        if self._recovery_active:
+            self._run_recovery_step()    # handles its own state
+            return                       # skip ALL carrot logic
+
         gx = self._final_goal.pose.position.x
         gy = self._final_goal.pose.position.y
         if math.hypot(gx-self._robot_x, gy-self._robot_y) < self._goal_tol:
@@ -465,9 +520,11 @@ class LaneBevCarrotNode(Node):
             # Fallback 1: lateral grid search in map frame
             carrot = self._fallback_carrot(rx_map, ry_map, fwd, map_yaw)
 
-            # Fallback 2: guaranteed straight-ahead crawl
-            if carrot is None:
+            # Fallback 2: guaranteed straight-ahead crawl (suppressed during recovery)
+            if carrot is None and not self._recovery_active:
                 carrot = self._straight_ahead_carrot(rx_map, ry_map, map_yaw)
+            elif carrot is None:
+                return  # recovery is active, don't send emergency carrot
         else:
             self._streak = 0
 
@@ -502,6 +559,370 @@ class LaneBevCarrotNode(Node):
         msg.pose.orientation.z = math.sin(yaw/2)
         msg.pose.orientation.w = math.cos(yaw/2)
         self._pub.publish(msg)
+
+    # ── Recovery: stuck detection ──────────────────────────────────────
+
+    def _update_stuck_detection(self):
+        """Track position history and detect stuck condition (two-signal)."""
+        now = _time.monotonic()
+        rx, ry = self._robot_x, self._robot_y
+
+        # Record position every tick, prune old entries
+        self._pos_history.append((rx, ry, now))
+        self._pos_history = [(x, y, t) for x, y, t in self._pos_history
+                             if now - t <= 10.0]
+
+        if self._recovery_active or self._final_goal is None:
+            return
+
+        # ── If already in CONFIRMING, just wait for timer ──────────────
+        if self._stuck_timer_start is not None:
+            # Cancel confirming only if robot moved significantly
+            confirm_x, confirm_y = self._confirming_pos
+            if math.hypot(rx - confirm_x, ry - confirm_y) > 0.1:
+                self.get_logger().info(
+                    '[recovery] Robot moved during confirming — cancelling')
+                self._stuck_timer_start = None
+                self._confirming_pos = None
+                self._recovery_state = 'NORMAL'
+                return
+
+            if now - self._stuck_timer_start < 1.0:
+                return  # still in confirming window
+
+            # ── Confirmed stuck → enter recovery ──────────────────────
+            self.get_logger().error(
+                f'[recovery] STUCK CONFIRMED at ({rx:.2f},{ry:.2f}) — entering LEVEL_1')
+            self._recovery_active = True
+            self._recovery_level = 1
+            self._recovery_state = 'LEVEL_1'
+            self._recovery_step_start = now
+            self._recovery_sub_step = 0
+            self._pre_recovery_pos = (rx, ry)
+            self._confirming_pos = None
+            self._cancel_nav2_goal()
+            return
+
+        # ── Signal A: position displacement ────────────────────────────
+        signal_a = False
+        signal_a_hard = False
+
+        # Max displacement across all points in the 3s window
+        hist_3s = [(x, y) for x, y, t in self._pos_history
+                   if now - t >= self._stuck_confirm_s - 0.2]
+        if hist_3s:
+            max_disp = max(math.hypot(rx - x, ry - y) for x, y in hist_3s)
+            if max_disp < self._stuck_disp_thr:
+                signal_a = True
+
+        # Hard stuck: max displacement < 0.05m over 6s → A alone is enough
+        hist_6s = [(x, y) for x, y, t in self._pos_history
+                   if now - t >= self._stuck_hard_s - 0.2]
+        if hist_6s:
+            max_disp_hard = max(math.hypot(rx - x, ry - y) for x, y in hist_6s)
+            if max_disp_hard < self._stuck_disp_thr:
+                signal_a_hard = True
+
+        if not signal_a and not signal_a_hard:
+            return
+
+        # ── Signal B: behavioral confirmation ──────────────────────────
+        signal_b = False
+        if self._streak >= self._stuck_streak_thr:
+            signal_b = True
+        if not signal_b and self._check_forward_blocked():
+            signal_b = True
+
+        # ── Decision ───────────────────────────────────────────────────
+        confirmed = (signal_a and signal_b) or signal_a_hard
+
+        if not confirmed:
+            return
+
+        # Transition to CONFIRMING (1s extra observation)
+        self._stuck_timer_start = now
+        self._confirming_pos = (rx, ry)
+        self._recovery_state = 'CONFIRMING'
+        self.get_logger().warn(
+            f'[recovery] STUCK DETECTED — confirming for 1s '
+            f'(streak={self._streak}, sigA={signal_a}, sigA_hard={signal_a_hard}, sigB={signal_b})')
+
+    def _check_forward_blocked(self) -> bool:
+        """Check if forward LiDAR arc (±arc_deg, < clear_m) is blocked."""
+        if self._last_scan_msg is None:
+            return False
+        # Scan freshness check — stale scan (>1s) is unreliable
+        if _time.monotonic() - self._last_scan_stamp > 1.0:
+            return False
+        msg = self._last_scan_msg
+        arc_rad = math.radians(self._fwd_arc_deg)
+        angle = msg.angle_min
+        blocked_count = 0
+        total_in_arc = 0
+        for r in msg.ranges:
+            # Forward is angle ~0 in base_link frame
+            if -arc_rad <= angle <= arc_rad:
+                total_in_arc += 1
+                if msg.range_min <= r <= msg.range_max and r < self._fwd_clear_m:
+                    blocked_count += 1
+            angle += msg.angle_increment
+        if total_in_arc == 0:
+            return False
+        # >50% of rays in the arc are blocked
+        return (blocked_count / total_in_arc) > 0.5
+
+    # ── Recovery: state machine execution ──────────────────────────────
+
+    def _run_recovery_step(self):
+        """Execute the current recovery level. Called from _tick() when active."""
+        now = _time.monotonic()
+        elapsed = now - self._recovery_step_start if self._recovery_step_start else 0.0
+
+        # ── Check for recovery success at any point ────────────────────
+        if self._pre_recovery_pos is not None:
+            rx, ry = self._robot_x, self._robot_y
+            ox, oy = self._pre_recovery_pos
+            if math.hypot(rx - ox, ry - oy) > 0.1:
+                self.get_logger().info(
+                    f'[recovery] SUCCESS — displaced {math.hypot(rx-ox, ry-oy):.2f}m, '
+                    f'returning to NORMAL')
+                self._exit_recovery_success()
+                return
+
+        if self._recovery_state == 'LEVEL_1':
+            self._run_level_1(elapsed)
+        elif self._recovery_state == 'LEVEL_2':
+            self._run_level_2(elapsed)
+        elif self._recovery_state == 'LEVEL_3':
+            self._run_level_3(elapsed)
+        elif self._recovery_state == 'FAILED':
+            self._run_failed()
+
+    def _run_level_1(self, elapsed):
+        """LEVEL 1: Clear local costmap + wait 2s (zero physical risk)."""
+        now = _time.monotonic()
+        if self._recovery_sub_step == 0:
+            # Freeze carrot at robot position → Nav2 decelerates
+            self._publish_robot_pos_as_carrot()
+            self._recovery_sub_step = 1
+            self._recovery_step_start = now
+            self.get_logger().info('[recovery] L1: freezing carrot at robot pos')
+            return
+
+        if self._recovery_sub_step == 1 and elapsed >= self._rec_halt_delay:
+            # Clear local costmap
+            if self._clear_local_costmap_cli.service_is_ready():
+                self._clear_local_costmap_cli.call_async(Empty.Request())
+                self.get_logger().info('[recovery] L1: cleared local costmap')
+            else:
+                self.get_logger().warn('[recovery] L1: local costmap clear service not ready')
+            self._recovery_sub_step = 2
+            self._recovery_step_start = now
+            return
+
+        if self._recovery_sub_step == 2 and elapsed >= 2.0:
+            # Check if streak dropped (costmap obstacle was false)
+            if self._streak < self._stuck_streak_thr:
+                self.get_logger().info('[recovery] L1: streak dropped, costmap clear worked!')
+                self._exit_recovery_success()
+                return
+            # Escalate to LEVEL_2
+            self.get_logger().warn('[recovery] L1 failed — escalating to LEVEL_2')
+            self._recovery_level = 2
+            self._recovery_state = 'LEVEL_2'
+            self._recovery_step_start = now
+            self._recovery_sub_step = 0
+
+    def _run_level_2(self, elapsed):
+        """LEVEL 2: Backup 0.5m (~3.3s at 0.15m/s)."""
+        now = _time.monotonic()
+        backup_duration = 0.5 / self._rec_backup_spd  # time = dist / speed
+
+        if self._recovery_sub_step == 0:
+            # Freeze carrot
+            self._publish_robot_pos_as_carrot()
+            self._recovery_sub_step = 1
+            self._recovery_step_start = now
+            self.get_logger().info('[recovery] L2: freezing carrot, waiting for Nav2 halt')
+            return
+
+        if self._recovery_sub_step == 1 and elapsed >= self._rec_halt_delay:
+            # Start backup via twist_mux /cmd_vel_recovery
+            self._recovery_sub_step = 2
+            self._recovery_step_start = now
+            self.get_logger().info(
+                f'[recovery] L2: backing up at {self._rec_backup_spd}m/s '
+                f'for {backup_duration:.1f}s')
+            return
+
+        if self._recovery_sub_step == 2:
+            if elapsed < backup_duration:
+                # Publish backup velocity
+                cmd = Twist()
+                cmd.linear.x = -self._rec_backup_spd
+                self._recovery_cmd_pub.publish(cmd)
+            else:
+                # Stop
+                self._publish_zero_recovery()
+                self._recovery_sub_step = 3
+                self._recovery_step_start = now
+                return
+
+        if self._recovery_sub_step == 3 and elapsed >= 0.3:
+            # Check displacement
+            rx, ry = self._robot_x, self._robot_y
+            ox, oy = self._pre_recovery_pos
+            if math.hypot(rx - ox, ry - oy) > 0.1:
+                self._exit_recovery_success()
+                return
+            # Escalate to LEVEL_3
+            self.get_logger().warn('[recovery] L2 failed — escalating to LEVEL_3')
+            self._recovery_level = 3
+            self._recovery_state = 'LEVEL_3'
+            self._recovery_step_start = now
+            self._recovery_sub_step = 0
+
+    def _run_level_3(self, elapsed):
+        """LEVEL 3: Backup 0.3m + Rotate 60°."""
+        now = _time.monotonic()
+        backup_duration = 0.3 / self._rec_backup_spd
+        # 60° ≈ 1.047 rad, time = angle / speed
+        rotate_duration = 1.047 / self._rec_rotate_spd
+
+        if self._recovery_sub_step == 0:
+            # Freeze carrot
+            self._publish_robot_pos_as_carrot()
+            self._recovery_sub_step = 1
+            self._recovery_step_start = now
+            self.get_logger().info('[recovery] L3: freezing carrot for halt')
+            return
+
+        if self._recovery_sub_step == 1 and elapsed >= self._rec_halt_delay:
+            # Start backup
+            self._recovery_sub_step = 2
+            self._recovery_step_start = now
+            self.get_logger().info(f'[recovery] L3: backing up {backup_duration:.1f}s')
+            return
+
+        if self._recovery_sub_step == 2:
+            if elapsed < backup_duration:
+                cmd = Twist()
+                cmd.linear.x = -self._rec_backup_spd
+                self._recovery_cmd_pub.publish(cmd)
+            else:
+                self._publish_zero_recovery()
+                self._recovery_sub_step = 3
+                self._recovery_step_start = now
+                return
+
+        if self._recovery_sub_step == 3 and elapsed >= 0.2:
+            # Start rotation
+            self._recovery_sub_step = 4
+            self._recovery_step_start = now
+            self.get_logger().info(f'[recovery] L3: rotating {rotate_duration:.1f}s')
+            return
+
+        if self._recovery_sub_step == 4:
+            if elapsed < rotate_duration:
+                cmd = Twist()
+                cmd.angular.z = self._rec_rotate_spd
+                self._recovery_cmd_pub.publish(cmd)
+            else:
+                self._publish_zero_recovery()
+                self._recovery_sub_step = 5
+                self._recovery_step_start = now
+                return
+
+        if self._recovery_sub_step == 5 and elapsed >= 0.3:
+            # Check displacement
+            rx, ry = self._robot_x, self._robot_y
+            ox, oy = self._pre_recovery_pos
+            if math.hypot(rx - ox, ry - oy) > 0.1:
+                self._exit_recovery_success()
+                return
+            # Escalate to FAILED
+            self.get_logger().error('[recovery] L3 failed — RECOVERY EXHAUSTED')
+            self._recovery_state = 'FAILED'
+            self._recovery_step_start = now
+            self._recovery_sub_step = 0
+
+    def _run_failed(self):
+        """FAILED: Alert, stop, and require operator intervention."""
+        rx, ry = self._robot_x, self._robot_y
+        self._publish_zero_recovery()
+
+        alert = json.dumps({
+            'event': 'RECOVERY_EXHAUSTED',
+            'position': {'x': round(rx, 2), 'y': round(ry, 2)},
+            'level_reached': self._recovery_level,
+            'streak': self._streak,
+        })
+        msg = String()
+        msg.data = alert
+        self._alert_pub.publish(msg)
+
+        self.get_logger().error(
+            f'[recovery] RECOVERY EXHAUSTED at ({rx:.2f},{ry:.2f}). '
+            f'Republish /final_goal to resume.')
+
+        # Hard stop — don't let carrot keep trying
+        self._final_goal = None
+        self._recovery_active = False
+        self._recovery_state = 'NORMAL'
+
+    # ── Recovery: helpers ──────────────────────────────────────────────
+
+    def _publish_zero_recovery(self):
+        """Publish zero velocity on /cmd_vel_recovery."""
+        self._recovery_cmd_pub.publish(Twist())
+
+    def _publish_robot_pos_as_carrot(self):
+        """Publish current robot position as carrot → Nav2 decelerates to stop."""
+        try:
+            base_tf = self._tf_buf.lookup_transform(
+                'map', 'base_link', rclpy.time.Time(),
+                timeout=rclpy.duration.Duration(seconds=0.05))
+        except tf2_ros.TransformException:
+            return
+        bt = base_tf.transform.translation
+        msg = PoseStamped()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = 'map'
+        msg.pose.position.x = bt.x
+        msg.pose.position.y = bt.y
+        bq = base_tf.transform.rotation
+        msg.pose.orientation = bq
+        self._pub.publish(msg)
+
+    def _cancel_nav2_goal(self):
+        """Cancel all active Nav2 NavigateToPose action goals."""
+        if not self._cancel_nav2_cli.service_is_ready():
+            self.get_logger().warn('[recovery] Nav2 cancel service not ready')
+            return
+        req = CancelGoal.Request()
+        # Zero goal_id + zero stamp = cancel ALL goals
+        self._cancel_nav2_cli.call_async(req)
+        self.get_logger().info('[recovery] Sent cancel_all_goals to Nav2')
+
+    def _exit_recovery_success(self):
+        """Clean exit from recovery — reset all state."""
+        self._publish_zero_recovery()
+        # Full state reset
+        self._streak            = 0
+        self._last_fit          = None
+        self._last_fit_stamp    = None
+        self._locked_carrot     = None
+        self._carrot_locked     = False
+        self._approach_dir      = None
+        self._recovery_active   = False
+        self._recovery_state    = 'NORMAL'
+        self._recovery_level    = 0
+        self._stuck_timer_start = None
+        self._pos_history.clear()
+        self._recovery_step_start = None
+        self._recovery_sub_step = 0
+        self._pre_recovery_pos  = None
+        self.get_logger().info('[recovery] State fully reset, resuming normal carrot')
 
 
 def main(args=None):

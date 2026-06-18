@@ -13,6 +13,7 @@
   <depend>geometry_msgs</depend>
   <!-- added for Bool / Float32 used by lane_assist_node -->
   <depend>std_msgs</depend>
+  <depend>twist_mux</depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
