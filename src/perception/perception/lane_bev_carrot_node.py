@@ -22,7 +22,7 @@ Safety: TWO independent obstacle checks per candidate (unchanged from v4):
   1. road_costmap  (/perception/road_costmap, map frame, 5 Hz)
   2. LaserScan     (/scan, real-time)
 """
-
+from std_msgs.msg import Bool
 import math, json, os
 import numpy as np
 import cv2
@@ -164,7 +164,9 @@ class LaneBevCarrotNode(Node):
             f'min_clear={self._min_clear_m}m | '
             f'fallback_dists={self._fallback_dists} '
             f'straight_ahead={self._straight_dist}m')
-
+        self._paused = False
+        self.create_subscription(Bool, '/start', self._start_cb, 10)
+        self.create_subscription(Bool, '/done',  self._done_cb,  10)
     # ── callbacks ──────────────────────────────────────────────────────
 
     def _goal_cb(self, msg):
@@ -341,12 +343,23 @@ class LaneBevCarrotNode(Node):
         cy = ry_map + self._straight_dist * math.sin(map_yaw)
         self.get_logger().warn(f'[straight-ahead] emergency carrot ({cx:.2f},{cy:.2f})')
         return (cx, cy)
+    def _start_cb(self, msg: Bool):
+        if msg.data:
+            self._paused = True
+            self.get_logger().info('Carrot paused — face task running.')
 
+    def _done_cb(self, msg: Bool):
+        if msg.data:
+            self._paused = False
+            self.get_logger().info('Carrot resumed — face task complete.')
     # ── main tick ──────────────────────────────────────────────────────
 
     def _tick(self):
         if self._final_goal is None or self._last_img is None:
             return
+        if self._paused:
+            return
+        
         gx = self._final_goal.pose.position.x
         gy = self._final_goal.pose.position.y
         if math.hypot(gx-self._robot_x, gy-self._robot_y) < self._goal_tol:

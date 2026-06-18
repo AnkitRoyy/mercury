@@ -3,7 +3,7 @@
 health:
   ros__parameters:
     # How often to check system health (seconds)
-    check_interval: 2.0
+    check_interval: 0.5
     # How long a topic can be silent before alerting (seconds)
     topic_timeout: 5.0
     # Expected nodes for this workspace
@@ -63,7 +63,7 @@ waypoints:
     waypoints: [15.57, -35.36, 1.59, -35.37, -11.21, -35.05]
     waypoint_names: ["WP-1", "WP-2", "WP-3"]
     # Arrival detection radius (metres)
-    arrival_radius: 1.0
+    arrival_radius: 2.0
     # How often to publish status summary (seconds)
     status_interval: 0.5
     # Odometry topic
@@ -75,4 +75,4 @@ waypoints:
 dashboard:
   ros__parameters:
     # Refresh rate (Hz)
-    refresh_rate: 1.0
+    refresh_rate: 5.0

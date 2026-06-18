@@ -1,6 +1,6 @@
 health:
   ros__parameters:
-    check_interval: 2.0
+    check_interval: 0.5
     topic_timeout: 5.0
     expected_nodes:
     - /behavior_server
@@ -52,18 +52,18 @@ waypoints:
     - -35.37
     - -11.21
     - -35.05
-    - 6.143413521421785e-08
-    - 9.987546495887182e-15
+    - 6.143413529887475e-08
+    - 9.593598764182918e-15
     waypoint_names:
     - WP-1
     - WP-2
     - WP-3
     - HOME
-    arrival_radius: 1.5
+    arrival_radius: 2.0
     status_interval: 0.5
     odom_topic: /diff_drive_controller/odom
     map_frame: map
     odom_frame: odom
 dashboard:
   ros__parameters:
-    refresh_rate: 1.0
+    refresh_rate: 5.0
