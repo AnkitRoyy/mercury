@@ -5,36 +5,32 @@ waypoints.py
 Waypoint detection node.
 
 Subscribes:
-    /diff_drive_controller/odom  (nav_msgs/Odometry)
+    map -> base_link TF (via slam_toolbox + EKF)
 
 Publishes:
     /waypoint_reached  (std_msgs/String)  - JSON event on each detection
     /waypoint_status   (std_msgs/String)  - Periodic JSON overview
 
 Parameters:
-    spawn_x, spawn_y     - Robot spawn position (world coordinates)
-    waypoints            - Flat list [x1,y1, x2,y2, ...] in world coords
+    waypoints            - Flat list [x1,y1, x2,y2, ...] in map/world coords
     waypoint_names       - Names for each waypoint
     arrival_radius       - Distance to count as "reached"
     status_interval      - Seconds between status publishes
-    odom_topic           - Odometry topic to subscribe to
+    map_frame            - Frame id of the world/map frame (default 'map')
+    base_frame           - Frame id of the robot base (default 'base_link')
 """
 
 import json
 import math
 import time
-from typing import Any
 from rclpy.parameter import Parameter
 import rclpy
 from rclpy.node import Node
+from rclpy.time import Time
 from std_msgs.msg import String
 
-try:
-    from nav_msgs.msg import Odometry
-    _HAVE_NAV = True
-except ImportError:
-    _HAVE_NAV = False
-    Odometry = None
+import tf2_ros
+from tf2_ros import TransformException
 
 
 class Waypoint:
@@ -49,6 +45,7 @@ class Waypoint:
         self.reached = False
         self.reached_at: float | None = None
         self.reach_count = 0
+        self.passed = False  # Track if waypoint has been passed
 
     def distance_to(self, rx: float, ry: float) -> float:
         return math.hypot(rx - self.x, ry - self.y)
@@ -63,6 +60,7 @@ class Waypoint:
             'reached': self.reached,
             'reach_count': self.reach_count,
             'reached_at': self.reached_at,
+            'passed': self.passed,
         }
 
 
@@ -71,37 +69,33 @@ class WaypointsNode(Node):
     def __init__(self):
         super().__init__('waypoints')
 
-        # ── Parameters ────────────────────────────────────────────────────────
-        self.declare_parameter('spawn_x', 0.0)
-        self.declare_parameter('spawn_y', 0.0)
-        self.declare_parameter('spawn_yaw', 0.0)
+        # Parameters
         self.declare_parameter(
             'waypoints',
             Parameter.Type.DOUBLE_ARRAY
         )
-
         self.declare_parameter(
             'waypoint_names',
             Parameter.Type.STRING_ARRAY
         )
         self.declare_parameter('arrival_radius', 0.5)
         self.declare_parameter('status_interval', 1.0)
-        self.declare_parameter('odom_topic', '/diff_drive_controller/odom')
-        
-        spawn_x = self.get_parameter('spawn_x').value
-        spawn_y = self.get_parameter('spawn_y').value
+        self.declare_parameter('map_frame', 'map')
+        self.declare_parameter('base_frame', 'base_link')
+
         waypoints_flat = self.get_parameter('waypoints').value
         names = self.get_parameter('waypoint_names').value
         radius = self.get_parameter('arrival_radius').value
         self._status_interval = self.get_parameter('status_interval').value
-        odom_topic = self.get_parameter('odom_topic').value
+        self._map_frame = self.get_parameter('map_frame').value
+        self._base_frame = self.get_parameter('base_frame').value
 
-        # ── Validate waypoints ───────────────────────────────────────────────
+        # Validate waypoints
         if len(waypoints_flat) % 2 != 0:
             self.get_logger().error('Waypoints must have an even number of values (x,y pairs)')
             waypoints_flat = waypoints_flat[:-1]
 
-        # ── Build waypoints ───────────────────────────────────────────────────
+        # Build waypoints
         self._waypoints: list[Waypoint] = []
         for i in range(0, len(waypoints_flat), 2):
             x = waypoints_flat[i]
@@ -113,47 +107,73 @@ class WaypointsNode(Node):
         for wp in self._waypoints:
             self.get_logger().info(f'  {wp.name}: ({wp.x:.2f}, {wp.y:.2f})')
 
-        # ── Robot pose ────────────────────────────────────────────────────────
-        self._robot_x = spawn_x
-        self._robot_y = spawn_y
+        # Robot pose (in map/world frame)
+        self._robot_x = 0.0
+        self._robot_y = 0.0
         self._pose_received = False
+        self._last_dbg = 0.0
+        
+        # Track previous distance to detect passing
+        self._prev_distances = {wp.idx: float('inf') for wp in self._waypoints}
 
-        # ── Publishers ────────────────────────────────────────────────────────
+        # TF
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+
+        # Publishers
         self._event_pub = self.create_publisher(String, '/waypoint_reached', 10)
         self._status_pub = self.create_publisher(String, '/waypoint_status', 10)
 
-        # ── Subscriber ────────────────────────────────────────────────────────
-        if _HAVE_NAV:
-            self.create_subscription(Odometry, odom_topic, self._odom_cb, 10)
-        else:
-            self.get_logger().warn('nav_msgs not available - pose will not update')
-
-        # ── Timers ────────────────────────────────────────────────────────────
-        self.create_timer(0.1, self._detection_loop)      # 10 Hz detection
+        # Timers
+        self.create_timer(0.05, self._detection_loop)      # 10 Hz detection
         self.create_timer(self._status_interval, self._publish_status)
 
-        self.get_logger().info('Waypoints node ready')
+        self.get_logger().info(
+            f'Waypoints node ready (pose from map->{self._base_frame} TF)'
+        )
 
-    def _odom_cb(self, msg: Odometry):
-        # Odom frame origin = spawn pose; odom axes are rotated by spawn_yaw.
-        # Must rotate odom-frame delta into world frame before adding spawn offset.
-        ox = msg.pose.pose.position.x
-        oy = msg.pose.pose.position.y
-        yaw = self.get_parameter('spawn_yaw').value
-        wx = ox * math.cos(yaw) - oy * math.sin(yaw)
-        wy = ox * math.sin(yaw) + oy * math.cos(yaw)
-        self._robot_x = self.get_parameter('spawn_x').value + wx
-        self._robot_y = self.get_parameter('spawn_y').value + wy
+    def _update_pose_from_tf(self) -> bool:
+        """
+        Look up map->base_link directly. This handles all 6 DOF correctly.
+        Returns True if pose was updated successfully.
+        """
+        try:
+            t = self.tf_buffer.lookup_transform(
+                self._map_frame, self._base_frame, Time()
+            )
+        except TransformException as ex:
+            if time.time() - self._last_dbg > 2.0:
+                self.get_logger().warn(
+                    f'{self._map_frame}->{self._base_frame} TF not available yet: {ex}'
+                )
+                self._last_dbg = time.time()
+            return False
+
+        self._robot_x = t.transform.translation.x
+        self._robot_y = t.transform.translation.y
         self._pose_received = True
+        return True
 
     def _detection_loop(self):
-        if not self._pose_received:
+        if not self._update_pose_from_tf():
             return
 
         rx, ry = self._robot_x, self._robot_y
 
         for wp in self._waypoints:
             dist = wp.distance_to(rx, ry)
+            
+            # Check if waypoint was passed (distance increasing after being close)
+            if not wp.passed and dist < wp.radius * 2.0:
+                # Track minimum distance to detect passing
+                if dist < self._prev_distances[wp.idx]:
+                    self._prev_distances[wp.idx] = dist
+                elif dist > self._prev_distances[wp.idx] + 0.1:  # Distance increasing significantly
+                    wp.passed = True
+                    self.get_logger().info(
+                        f'Waypoint passed: {wp.name} at ({wp.x:.2f}, {wp.y:.2f}) '
+                        f'(min distance: {self._prev_distances[wp.idx]:.3f}m)'
+                    )
 
             # Arrival detection
             if not wp.reached and dist <= wp.radius:
@@ -162,8 +182,8 @@ class WaypointsNode(Node):
                 wp.reach_count += 1
 
                 self.get_logger().info(
-                    f'*** WAYPOINT REACHED: {wp.name} (#{wp.reach_count}) '
-                    f'at ({rx:.3f}, {ry:.3f}), dist={dist:.3f}m ***'
+                    f'WAYPOINT REACHED: {wp.name} (#{wp.reach_count}) '
+                    f'at ({rx:.3f}, {ry:.3f}), dist={dist:.3f}m'
                 )
 
                 event = {
@@ -180,6 +200,11 @@ class WaypointsNode(Node):
             elif wp.reached and dist > wp.radius * 2.0:
                 wp.reached = False
                 self.get_logger().debug(f'{wp.name} re-armed (moved {dist:.2f}m away)')
+                
+            # Reset passed flag if re-armed
+            if wp.passed and dist > wp.radius * 3.0:
+                wp.passed = False
+                self._prev_distances[wp.idx] = float('inf')
 
     def _publish_status(self):
         reached_count = sum(1 for wp in self._waypoints if wp.reach_count > 0)
@@ -198,7 +223,7 @@ class WaypointsNode(Node):
         self._status_pub.publish(String(data=json.dumps(status)))
 
         if all_reached:
-            self.get_logger().info('✓ All waypoints have been reached!')
+            self.get_logger().info('All waypoints have been reached')
 
 
 def main(args=None):

@@ -123,9 +123,6 @@ class LaneBevCarrotNode(Node):
 
         self._last_fit_robot = (0.0, 0.0)
 
-        self._carrot_locked  = False
-        self._locked_carrot  = None  # (wx, wy)
-
         # state
         self._final_goal      = None
         self._robot_x = self._robot_y = self._robot_yaw = 0.0
@@ -133,9 +130,6 @@ class LaneBevCarrotNode(Node):
         self._last_fit        = None
         self._last_fit_stamp  = None
         self._streak          = 0
-        # Finish-line gate: unit vector (robot→goal at goal-set time), map frame.
-        # Computed lazily on first tick after a new goal arrives.
-        self._approach_dir: tuple | None = None   # (dx, dy) unit vec
 
         # road costmap
         self._road_grid = None
@@ -176,9 +170,6 @@ class LaneBevCarrotNode(Node):
     def _goal_cb(self, msg):
         self._final_goal    = msg
         self._streak        = 0
-        self._carrot_locked = False
-        self._locked_carrot = None
-        self._approach_dir  = None   # recomputed on first tick
 
     def _odom_cb(self, msg):
         self._robot_x = msg.pose.pose.position.x
@@ -389,36 +380,6 @@ class LaneBevCarrotNode(Node):
             [bq.x, bq.y, bq.z, bq.w])
         fwd = np.array([math.cos(map_yaw), math.sin(map_yaw)])
 
-        # ── Finish-line approach direction (computed once per goal) ─────
-        if self._approach_dir is None:
-            dx = gx - rx_map; dy = gy - ry_map
-            d  = math.hypot(dx, dy)
-            if d > 0.01:
-                self._approach_dir = (dx / d, dy / d)
-
-        # ── Locked carrot (near-goal persistence) ──────────────────────
-        if self._carrot_locked and self._locked_carrot is not None:
-            cx, cy = self._locked_carrot
-            # If locked AT the goal, never invalidate — finish line was crossed
-            if cx == gx and cy == gy:
-                pass  # fall through to publish below
-            elif np.dot(fwd, np.array([cx - cam_pos[0], cy - cam_pos[1]])) <= 0 \
-                    or not self._is_safe(cx, cy):
-                self.get_logger().info('Locked carrot invalidated — recomputing')
-                self._carrot_locked = False
-                self._locked_carrot = None
-            if self._carrot_locked:  # still locked
-                yaw = math.atan2(cy - ry_map, cx - rx_map)
-                msg = PoseStamped()
-                msg.header.stamp    = self.get_clock().now().to_msg()
-                msg.header.frame_id = 'map'
-                msg.pose.position.x = cx
-                msg.pose.position.y = cy
-                msg.pose.orientation.z = math.sin(yaw / 2)
-                msg.pose.orientation.w = math.cos(yaw / 2)
-                self._pub.publish(msg)
-                return
-
         # ── BEV lane fit ───────────────────────────────────────────────
         bev   = cv2.warpPerspective(self._last_img, self._M, (self._bev_w, self._bev_h))
         fresh = self._road_fit(bev)
@@ -470,25 +431,6 @@ class LaneBevCarrotNode(Node):
                 carrot = self._straight_ahead_carrot(rx_map, ry_map, map_yaw)
         else:
             self._streak = 0
-
-        # ── Finish-line gate: lock carrot at goal if carrot crossed the
-        #    perpendicular plane at the goal (dot-product gate, same logic
-        #    as goal_decomposer gate planes).
-        #    Also triggers on the old distance-based goal_tol check.
-        if self._approach_dir is not None:
-            adx, ady = self._approach_dir
-            # dot( carrot - goal , approach_dir ) >= 0 → carrot is past goal
-            past_gate = ((carrot[0] - gx) * adx + (carrot[1] - gy) * ady) >= 0.0
-        else:
-            past_gate = False
-
-        if past_gate or math.hypot(carrot[0]-gx, carrot[1]-gy) <= self._goal_tol:
-            # Snap carrot to exact goal and lock permanently
-            carrot = (gx, gy)
-            self._carrot_locked  = True
-            self._locked_carrot  = carrot
-            self.get_logger().info(
-                f'Finish line crossed — carrot locked at goal ({gx:.2f},{gy:.2f})')
 
         # ── Publish carrot ─────────────────────────────────────────────
         dx  = carrot[0] - rx_map
