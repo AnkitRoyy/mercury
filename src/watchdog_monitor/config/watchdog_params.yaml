@@ -1,14 +1,11 @@
 # Watchdog Monitor Parameters
 # Consolidated configuration for all monitoring nodes
-
 health:
   ros__parameters:
     # How often to check system health (seconds)
     check_interval: 2.0
-    
     # How long a topic can be silent before alerting (seconds)
     topic_timeout: 5.0
-    
     # Expected nodes for this workspace
     expected_nodes: [
       "/behavior_server",
@@ -31,7 +28,6 @@ health:
       "/turret",
       "/twist_to_stamped"
     ]
-    
     # Critical nodes (must be running)
     critical_nodes: [
       "/robot_state_publisher",
@@ -47,14 +43,12 @@ health:
       "/joint_state_broadcaster",
       "/lane_costmap"
     ]
-    
     # Topics to monitor for liveness
     monitored_topics: [
       "/diff_drive_controller/odom",
       "/scan",
       "/imu"
     ]
-    
     # TF frame pairs to check
     tf_pairs: [
       "odom->base_link",
@@ -64,22 +58,19 @@ health:
 
 waypoints:
   ros__parameters:
-    # Robot spawn position (world coordinates)
-    spawn_x: 14.0
-    spawn_y: -38.0
-    spawn_yaw: -3.14
-    # Waypoints in world coordinates [x1, y1, x2, y2, ...]
-    waypoints: [12.0, -38.0, 2.0, -38.0, -11.0, -38.0]
+    # Waypoints in map/world frame coordinates [x1, y1, x2, y2, ...]
+    # HOME (4th waypoint) is appended at runtime by mission_setup.py
+    waypoints: [15.57, -35.36, 1.59, -35.37, -11.21, -35.05]
     waypoint_names: ["WP-1", "WP-2", "WP-3"]
-    
     # Arrival detection radius (metres)
     arrival_radius: 1.0
-    
     # How often to publish status summary (seconds)
-    status_interval: 1.0
-    
+    status_interval: 0.5
     # Odometry topic
     odom_topic: "/diff_drive_controller/odom"
+    # Frames used for live map->odom TF lookup (replaces static spawn_x/y/yaw)
+    map_frame: "map"
+    odom_frame: "odom"
 
 dashboard:
   ros__parameters:
