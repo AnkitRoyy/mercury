@@ -65,15 +65,15 @@ health:
 waypoints:
   ros__parameters:
     # Robot spawn position (world coordinates)
-    spawn_x: -21.0
-    spawn_y: -47.0
-    
+    spawn_x: 14.0
+    spawn_y: -38.0
+    spawn_yaw: -3.14
     # Waypoints in world coordinates [x1, y1, x2, y2, ...]
-    waypoints: [-19.0, -47.0, -15.0, -47.0, -21.0, -43.0]
+    waypoints: [12.0, -38.0, 2.0, -38.0, -11.0, -38.0]
     waypoint_names: ["WP-1", "WP-2", "WP-3"]
     
     # Arrival detection radius (metres)
-    arrival_radius: 0.5
+    arrival_radius: 1.0
     
     # How often to publish status summary (seconds)
     status_interval: 1.0
