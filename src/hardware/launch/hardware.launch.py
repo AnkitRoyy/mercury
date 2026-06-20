@@ -52,6 +52,23 @@ def generate_launch_description():
         ]
     )
 
+    # Teensy RPM converter for motor control via serial (micro USB)
+    teensy = Node(
+        package='hardware',
+        executable='rpm_converter.py',
+        name='teensy',
+        output='screen',
+        parameters=[{
+            'wheel_radius': 0.075,
+            'wheel_separation': 0.44,
+            'max_wheel_rpm': 240.0,
+            'serial_port': '/dev/ttyACM0',
+            'serial_baud': 115200,
+            'enable_serial': True,
+            'enable_debug': True,
+        }]
+    )
+
     return LaunchDescription([
         lidar,
         video_device_arg,
@@ -62,4 +79,5 @@ def generate_launch_description():
         backlight_arg,
         usb_cam,
         v4l2_ctrls,
+        teensy,
     ])
