@@ -12,8 +12,11 @@ from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 from launch.substitutions import PathJoinSubstitution
 
-GENERATED_YAML = (
-    "/home/soap/probes/mercury/src/mission/config/mission_params.yaml"
+from ament_index_python.packages import get_package_share_directory
+import os
+
+GENERATED_YAML = os.path.join(
+    get_package_share_directory("mission"), "config", "mission_params.yaml"
 )
 
 def generate_launch_description():

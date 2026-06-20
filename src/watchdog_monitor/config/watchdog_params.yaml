@@ -7,54 +7,48 @@ health:
     # How long a topic can be silent before alerting (seconds)
     topic_timeout: 5.0
     # Expected nodes for this workspace
-    expected_nodes: [
-      "/behavior_server",
-      "/bt_navigator",
-      "/controller_manager",
-      "/controller_server",
-      "/diff_drive_controller",
-      "/ekf_filter_node",
-      "/global_costmap/global_costmap",
-      "/joint_state_broadcaster",
-      "/lane_costmap",
-      "/lifecycle_manager_localization",
-      "/lifecycle_manager_navigation",
-      "/local_costmap/local_costmap",
-      "/planner_server",
-      "/pothole_costmap",
-      "/robot_state_publisher",
-      "/ros_gz_bridge",
-      "/slam_toolbox",
-      "/turret",
-      "/twist_to_stamped"
-    ]
+    expected_nodes:
+      [
+        "/behavior_server",
+        "/bt_navigator",
+        "/controller_manager",
+        "/controller_server",
+        "/diff_drive_controller",
+        "/ekf_filter_node",
+        "/global_costmap/global_costmap",
+        "/joint_state_broadcaster",
+        "/lane_costmap",
+        "/lifecycle_manager_localization",
+        "/lifecycle_manager_navigation",
+        "/local_costmap/local_costmap",
+        "/planner_server",
+        "/pothole_costmap",
+        "/robot_state_publisher",
+        "/ros_gz_bridge",
+        "/slam_toolbox",
+        "/turret",
+        "/twist_to_stamped",
+      ]
     # Critical nodes (must be running)
-    critical_nodes: [
-      "/robot_state_publisher",
-      "/ekf_filter_node",
-      "/slam_toolbox",
-      "/lifecycle_manager_localization",
-      "/planner_server",
-      "/controller_server",
-      "/bt_navigator",
-      "/behavior_server",
-      "/lifecycle_manager_navigation",
-      "/diff_drive_controller",
-      "/joint_state_broadcaster",
-      "/lane_costmap"
-    ]
+    critical_nodes:
+      [
+        "/robot_state_publisher",
+        "/ekf_filter_node",
+        "/slam_toolbox",
+        "/lifecycle_manager_localization",
+        "/planner_server",
+        "/controller_server",
+        "/bt_navigator",
+        "/behavior_server",
+        "/lifecycle_manager_navigation",
+        "/diff_drive_controller",
+        "/joint_state_broadcaster",
+        "/lane_costmap",
+      ]
     # Topics to monitor for liveness
-    monitored_topics: [
-      "/diff_drive_controller/odom",
-      "/scan",
-      "/imu"
-    ]
+    monitored_topics: ["/diff_drive_controller/odom", "/scan", "/imu"]
     # TF frame pairs to check
-    tf_pairs: [
-      "odom->base_link",
-      "map->odom",
-      "base_link->laser_link"
-    ]
+    tf_pairs: ["odom->base_link", "map->odom", "base_link->laser_link"]
 
 waypoints:
   ros__parameters:
@@ -63,7 +57,7 @@ waypoints:
     waypoints: [15.57, -35.36, 1.59, -35.37, -11.21, -35.05]
     waypoint_names: ["WP-1", "WP-2", "WP-3"]
     # Arrival detection radius (metres)
-    arrival_radius: 2.0
+    arrival_radius: 0.5
     # How often to publish status summary (seconds)
     status_interval: 0.5
     # Odometry topic
