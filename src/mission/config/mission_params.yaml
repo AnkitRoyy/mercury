@@ -1,0 +1,69 @@
+health:
+  ros__parameters:
+    check_interval: 0.5
+    topic_timeout: 5.0
+    expected_nodes:
+    - /behavior_server
+    - /bt_navigator
+    - /controller_manager
+    - /controller_server
+    - /diff_drive_controller
+    - /ekf_filter_node
+    - /global_costmap/global_costmap
+    - /joint_state_broadcaster
+    - /lane_costmap
+    - /lifecycle_manager_localization
+    - /lifecycle_manager_navigation
+    - /local_costmap/local_costmap
+    - /planner_server
+    - /pothole_costmap
+    - /robot_state_publisher
+    - /ros_gz_bridge
+    - /slam_toolbox
+    - /turret
+    - /twist_to_stamped
+    critical_nodes:
+    - /robot_state_publisher
+    - /ekf_filter_node
+    - /slam_toolbox
+    - /lifecycle_manager_localization
+    - /planner_server
+    - /controller_server
+    - /bt_navigator
+    - /behavior_server
+    - /lifecycle_manager_navigation
+    - /diff_drive_controller
+    - /joint_state_broadcaster
+    - /lane_costmap
+    monitored_topics:
+    - /diff_drive_controller/odom
+    - /scan
+    - /imu
+    tf_pairs:
+    - odom->base_link
+    - map->odom
+    - base_link->laser_link
+waypoints:
+  ros__parameters:
+    waypoints:
+    - 15.57
+    - -35.36
+    - 1.59
+    - -35.37
+    - -11.21
+    - -35.05
+    - 6.143413529887475e-08
+    - 9.593598764182918e-15
+    waypoint_names:
+    - WP-1
+    - WP-2
+    - WP-3
+    - HOME
+    arrival_radius: 2.0
+    status_interval: 0.5
+    odom_topic: /diff_drive_controller/odom
+    map_frame: map
+    odom_frame: odom
+dashboard:
+  ros__parameters:
+    refresh_rate: 5.0
