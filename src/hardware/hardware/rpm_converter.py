@@ -40,6 +40,7 @@ from std_msgs.msg import Float32MultiArray, String
 import math
 import serial
 import threading
+from sensor_msgs.msg import Imu
 
 
 class TeensyRpmNode(Node):
@@ -70,7 +71,16 @@ class TeensyRpmNode(Node):
         # Serial connection
         self.serial_conn = None
         self.serial_lock = threading.Lock()
+
+
+        self._imu_pub  = self.create_publisher(Imu,   '/imu',           10)
+        self._enc_pub  = self.create_publisher(Float32MultiArray, '/wheel_encoders', 10)
+
         self.init_serial()
+
+        self._read_thread = threading.Thread(target=self._read_loop, daemon=True)
+        self._read_thread.start()
+
 
         # ── Publishers ────────────────────────────────────────────────────────
         self.pub_wheel_speeds = self.create_publisher(Float32MultiArray, '/wheel_speeds', 10)
@@ -108,6 +118,40 @@ class TeensyRpmNode(Node):
         except serial.SerialException as e:
             self.get_logger().error(f'Failed to open serial port {self.serial_port}: {e}')
             self.serial_conn = None
+
+        
+
+    def _read_loop(self):
+        import json, time
+        while rclpy.ok():
+            try:
+                if self.serial_conn is None or not self.serial_conn.is_open:
+                    time.sleep(1.0)
+                    # Start read thread
+                    self.init_serial()
+                    continue
+                line = self.serial_conn.readline().decode('utf-8', errors='ignore').strip()
+                if not line or not line.startswith('{'): continue
+                data = json.loads(line)
+                if data.get('t') == 'imu':
+                    msg = Imu()
+                    msg.header.stamp    = self.get_clock().now().to_msg()
+                    msg.header.frame_id = 'imu_link'
+                    msg.orientation.x   = float(data['qx'])
+                    msg.orientation.y   = float(data['qy'])
+                    msg.orientation.z   = float(data['qz'])
+                    msg.orientation.w   = float(data['qw'])
+                    self._imu_pub.publish(msg)
+                elif data.get('t') == 'enc':
+                    msg = Float32MultiArray()
+                    msg.data = [float(data['rpmFR']), float(data['rpmFL']),
+                                float(data['rpmRR']), float(data['rpmRL'])]
+                    self._enc_pub.publish(msg)
+            except (json.JSONDecodeError, KeyError): pass
+            except Exception as e:
+                self.get_logger().warn(f'Read error: {e}')
+                self.serial_conn = None
+                time.sleep(1.0)
 
     def send_to_teensy(self, rpm_left: float, rpm_right: float):
         """
