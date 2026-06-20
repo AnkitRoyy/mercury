@@ -55,7 +55,7 @@ def generate_launch_description():
             executable='create',
             arguments=[
                 '-topic', 'robot_description',
-                # '-x', '14.0',
+                # '-x', '20.0',
                 # '-y', '-38.0',
                 # '-Y', '-3.14',
             ],
