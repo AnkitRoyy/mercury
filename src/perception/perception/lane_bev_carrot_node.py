@@ -170,8 +170,9 @@ class LaneBevCarrotNode(Node):
     # ── callbacks ──────────────────────────────────────────────────────
 
     def _goal_cb(self, msg):
-        self._final_goal    = msg
-        self._streak        = 0
+        self._final_goal  = msg
+        self._streak      = 0
+        self._goal_reached = False
 
     def _odom_cb(self, msg):
         self._robot_x = msg.pose.pose.position.x
@@ -354,18 +355,66 @@ class LaneBevCarrotNode(Node):
             self.get_logger().info('Carrot resumed — face task complete.')
     # ── main tick ──────────────────────────────────────────────────────
 
+    def _publish_carrot(self, carrot: tuple, rx_map: float, ry_map: float):
+        dx  = carrot[0] - rx_map
+        dy  = carrot[1] - ry_map
+        yaw = math.atan2(dy, dx)
+        msg = PoseStamped()
+        msg.header.stamp    = self.get_clock().now().to_msg()
+        msg.header.frame_id = 'map'
+        msg.pose.position.x = carrot[0]
+        msg.pose.position.y = carrot[1]
+        msg.pose.orientation.z = math.sin(yaw / 2)
+        msg.pose.orientation.w = math.cos(yaw / 2)
+        self._pub.publish(msg)
+
     def _tick(self):
         if self._final_goal is None or self._last_img is None:
             return
         if self._paused:
             return
-        
         gx = self._final_goal.pose.position.x
         gy = self._final_goal.pose.position.y
-        if math.hypot(gx-self._robot_x, gy-self._robot_y) < self._goal_tol:
-            self.get_logger().info('Goal reached!')
-            self._final_goal = None; self._streak = 0; return
 
+        # ── TF: robot in map frame ─────────────────────────────────────
+        try:
+            base_tf = self._tf_buf.lookup_transform(
+                'map', 'base_link', rclpy.time.Time(),
+                timeout=rclpy.duration.Duration(seconds=0.05))
+        except tf2_ros.TransformException:
+            return
+
+        bt = base_tf.transform.translation
+        rx_map, ry_map = bt.x, bt.y
+        bq = base_tf.transform.rotation
+        _, _, map_yaw = tf_transformations.euler_from_quaternion(
+            [bq.x, bq.y, bq.z, bq.w])
+        fwd = np.array([math.cos(map_yaw), math.sin(map_yaw)])
+
+        dist_to_goal = math.hypot(gx - rx_map, gy - ry_map)
+
+        # ── Goal reached ───────────────────────────────────────────────
+        if dist_to_goal < self._goal_tol:
+            self.get_logger().info('Goal reached!')
+            self._final_goal = None
+            self._streak = 0
+            self._goal_reached = True
+            return
+
+        if self._goal_reached:
+            return
+
+        # ── PROXIMITY ZONE: skip all BEV/fallback, pin carrot to goal ──
+        proximity_threshold = max(self._goal_tol * 2.5, self._carrot_dist * 0.8)
+        if dist_to_goal < proximity_threshold:
+            carrot = (gx, gy)
+            self.get_logger().info(
+                f'[proximity] dist={dist_to_goal:.2f}m < {proximity_threshold:.2f}m → pinning carrot to goal',
+                throttle_duration_sec=1.0)
+            self._publish_carrot(carrot, rx_map, ry_map)
+            return
+
+        # ── Camera TF ──────────────────────────────────────────────────
         try:
             cam_tf = self._tf_buf.lookup_transform(
                 'map', 'camera_link', rclpy.time.Time(),
@@ -376,22 +425,6 @@ class LaneBevCarrotNode(Node):
         t       = cam_tf.transform.translation
         cam_pos = np.array([t.x, t.y, t.z])
         R_cam   = _qrot(cam_tf.transform.rotation)
-
-        # Robot pose in MAP frame — needed for fwd direction and fallback position.
-        # self._robot_yaw is odom-frame; SLAM can rotate map vs odom so we MUST
-        # use map->base_link TF for both position and heading.
-        try:
-            base_tf = self._tf_buf.lookup_transform(
-                'map', 'base_link', rclpy.time.Time(),
-                timeout=rclpy.duration.Duration(seconds=0.05))
-        except tf2_ros.TransformException:
-            return
-        bt = base_tf.transform.translation
-        rx_map, ry_map = bt.x, bt.y
-        bq = base_tf.transform.rotation
-        _, _, map_yaw = tf_transformations.euler_from_quaternion(
-            [bq.x, bq.y, bq.z, bq.w])
-        fwd = np.array([math.cos(map_yaw), math.sin(map_yaw)])
 
         # ── BEV lane fit ───────────────────────────────────────────────
         bev   = cv2.warpPerspective(self._last_img, self._M, (self._bev_w, self._bev_h))
@@ -405,7 +438,7 @@ class LaneBevCarrotNode(Node):
         if fit is not None and self._last_fit_stamp is not None:
             age   = (self.get_clock().now() - self._last_fit_stamp).nanoseconds / 1e9
             drift = math.hypot(self._robot_x - self._last_fit_robot[0],
-                               self._robot_y - self._last_fit_robot[1])
+                            self._robot_y - self._last_fit_robot[1])
             if age > self._fit_cache_sec or drift > 0.3:
                 fit = None
 
@@ -420,43 +453,35 @@ class LaneBevCarrotNode(Node):
                 dp          = np.array([pt[0]-rx_map, pt[1]-ry_map])
                 dist_to_pt  = math.hypot(*dp)
                 dp_from_cam = np.array([pt[0]-cam_pos[0], pt[1]-cam_pos[1]])
-                if np.dot(fwd, dp_from_cam) <= 0:     continue
-                if dist_to_pt < self._min_proj:        continue
-                if dist_to_pt > self._max_carrot_dist: continue
-                if not self._is_safe(pt[0], pt[1]):    continue
+                if np.dot(fwd, dp_from_cam) <= 0:      continue
+                if dist_to_pt < self._min_proj:         continue
+                if dist_to_pt > self._max_carrot_dist:  continue
+                if dist_to_pt > dist_to_goal:           continue  # never past goal
+                if not self._is_safe(pt[0], pt[1]):     continue
                 clearance = self._lateral_clearance(pt[0], pt[1])
                 score = abs(dist_to_pt - self._carrot_dist) - 0.5 * clearance
                 if score < best_score:
                     best_score = score; carrot = pt
 
-        # ── Fallback chain when BEV yields nothing ─────────────────────
+        # ── Fallback chain ─────────────────────────────────────────────
         if carrot is None:
             self._streak += 1
             self.get_logger().warn(
                 f'No BEV carrot (streak={self._streak}) — trying lateral sweep',
                 throttle_duration_sec=1.0)
-
-            # Fallback 1: lateral grid search in map frame
             carrot = self._fallback_carrot(rx_map, ry_map, fwd, map_yaw)
-
-            # Fallback 2: guaranteed straight-ahead crawl
             if carrot is None:
                 carrot = self._straight_ahead_carrot(rx_map, ry_map, map_yaw)
         else:
             self._streak = 0
 
-        # ── Publish carrot ─────────────────────────────────────────────
-        dx  = carrot[0] - rx_map
-        dy  = carrot[1] - ry_map
-        yaw = math.atan2(dy, dx)
-        msg = PoseStamped()
-        msg.header.stamp    = self.get_clock().now().to_msg()
-        msg.header.frame_id = 'map'
-        msg.pose.position.x = carrot[0]
-        msg.pose.position.y = carrot[1]
-        msg.pose.orientation.z = math.sin(yaw/2)
-        msg.pose.orientation.w = math.cos(yaw/2)
-        self._pub.publish(msg)
+        # ── GATE: clamp carrot so it never overshoots the goal ────────
+        # Project carrot onto robot→goal ray, clamp distance
+        if math.hypot(carrot[0] - rx_map, carrot[1] - ry_map) > dist_to_goal:
+            carrot = (gx, gy)
+            self.get_logger().info('[gate] carrot clamped to goal', throttle_duration_sec=1.0)
+
+        self._publish_carrot(carrot, rx_map, ry_map)
 
 
 def main(args=None):

@@ -23,7 +23,6 @@ planner_server:
         w_data: 0.2
         tolerance: 1.0e-10
 
-
 controller_server:
   ros__parameters:
     use_sim_time: True
@@ -41,7 +40,7 @@ controller_server:
       plugin: "nav2_controller::SimpleGoalChecker"
       # Generous tolerances — the gate plane logic in goal_decomposer
       # handles WP completion, not Nav2's goal checker.
-      xy_goal_tolerance: 0.8
+      xy_goal_tolerance: 0.25
       yaw_goal_tolerance: 0.8
       stateful: True
 
@@ -62,7 +61,7 @@ controller_server:
       decel_lim_theta: -2.0
 
       vx_samples: 20
-      vtheta_samples: 35  
+      vtheta_samples: 35
 
       sim_time: 2.5
       linear_granularity: 0.05

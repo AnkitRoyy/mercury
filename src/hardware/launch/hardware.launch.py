@@ -69,8 +69,21 @@ def generate_launch_description():
         }]
     )
 
+    gps = Node(
+        package='nmea_navsat_driver',
+        executable='nmea_serial_driver',
+        name='gps',
+        output='screen',
+        parameters=[{
+            'port': '/dev/ttyACM1',
+            'baud': 38400,
+            'frame_id': 'gps_link',
+        }],
+        remappings=[('fix', '/gps')]
+    )
+
     return LaunchDescription([
-        lidar,
+        # lidar,
         video_device_arg,
         auto_exposure_arg,
         exposure_time_arg,
@@ -80,4 +93,5 @@ def generate_launch_description():
         usb_cam,
         v4l2_ctrls,
         teensy,
+        gps,  
     ])
