@@ -12,8 +12,8 @@ global_costmap:
       rolling_window: false
       always_send_full_costmap: true
 
-      width:      70
-      height:     70
+      width:      100
+      height:     100
       resolution: 0.10
       origin_x:  -35.0
       origin_y:  -35.0
@@ -22,7 +22,7 @@ global_costmap:
       footprint_padding: 0.02
 
       # lane_layer and pothole_layer removed for simulation —
-      # those topics only exist when real perception nodes are running.
+      # those topics only exist when real perception nodes are running
       # Re-add them for real robot deployment.
       plugins:
         - obstacle_layer
@@ -48,5 +48,5 @@ global_costmap:
 
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        inflation_radius: 0.6
+        inflation_radius: 4.0
         cost_scaling_factor: 0.5

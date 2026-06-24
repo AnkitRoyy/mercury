@@ -19,7 +19,7 @@
         <geometry>
           <box size="${base_length} ${base_width} ${base_height}"/>
         </geometry>
-        <origin xyz="0 0 ${base_height/2}" rpy="0 0 0"/>
+        <origin xyz="0 0 ${base_height/2 + wheel_radius}" rpy="0 0 0"/>
         <material name="body_color">
           <color rgba="0.15 0.15 0.18 1"/>
         </material>
@@ -29,12 +29,12 @@
         <geometry>
           <box size="${base_length} ${base_width} ${base_height}"/>
         </geometry>
-        <origin xyz="0 0 ${base_height/2}" rpy="0 0 0"/>
+        <origin xyz="0 0 ${base_height/2 + wheel_radius}" rpy="0 0 0"/>
       </collision>
 
       <inertial>
         <mass value="10.0"/>
-        <origin xyz="0 0 ${base_height/2}"/>
+        <origin xyz="0 0 ${base_height/2 + wheel_radius}"/>
         <inertia ixx="0.2" iyy="0.2" izz="0.2" ixy="0" ixz="0" iyz="0"/>
       </inertial>
 

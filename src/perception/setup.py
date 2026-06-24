@@ -52,7 +52,7 @@ setup(
             'lane_costmap = perception.lane_costmap_node:main',
             'lane_assist_node = perception.lane_assist_node:main',
             'pothole_costmap = perception.pothole_costmap_node:main',
-            'follower = perception.final:main',
+            'follower = perception.test:main',
             'test = perception.test:main',
             'recorder=perception.recorder:main'
         ],

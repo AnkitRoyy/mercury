@@ -11,13 +11,18 @@ planner_server:
       max_iterations: 1000000
       max_on_approach_iterations: 1000
       max_planning_time: 1.0
-      cost_travel_multiplier: 5.0        # ↑ was 2.0 — A* strongly avoids inflated cells
+      cost_travel_multiplier: 7.0
       use_final_approach_orientation: false
       smoother:
         max_iterations: 1000
         w_smooth: 0.3
         w_data: 0.2
         tolerance: 1.0e-10
+      # NOTE: planner_server / SmacPlanner2D is left running because nav2
+      # bringup typically expects a planner+controller pair. However
+      # StanleyController.setPlan() now REPLACES whatever A* path this
+      # produces with a short synthetic straight-ahead path, so the global
+      # plan never pulls the robot toward a distant obstacle-routed goal.
 
 controller_server:
   ros__parameters:
@@ -41,34 +46,122 @@ controller_server:
       plugin: "control/StanleyController"
 
       # ── Stanley core ──────────────────────────────────────────────────
-      k_stanley:      0.5
-      k_soft:         3.0
-      speed_mps:      1.0
-      max_steer_deg:  30.0
+      k_stanley:     0.5
+      k_soft:        3.0
+      speed_mps:     1.0
+      max_steer_deg: 30.0
 
       # ── forward obstacle ──────────────────────────────────────────────
-      stop_dist:      0.5
-      slowdown_dist:  3.0
-      min_speed:      0.25
+      stop_dist:     0.5
+      slowdown_dist: 3.0
+      min_speed:     0.25
 
-      # ── lateral lookahead obstacle detection ──────────────────────────
-      # The controller samples N slices from near → far ahead of the robot.
-      # Each slice is weighted by distance so far threats dominate →
-      # steering starts BEFORE the robot reaches the obstacle cloud.
-      lateral_offset:   0.8    # how wide left/right to probe (m)
-      sample_dist_near: 1.0    # closest slice (m)
-      sample_dist_far:  6.0    # furthest slice (m) — increase to react earlier
-      sample_slices:    6      # number of slices between near and far
+      # ── rotate-in-place ───────────────────────────────────────────────
+      rotate_in_place_speed: 0.4
 
-      nudge_weight:   0.5      # kept for compat, unused
+      # ── NEW: rotate-in-place heading bias ─────────────────────────────
+      # When |lane_heading| >= this threshold during a blocked-forward stop,
+      # spin direction is taken from lane_heading sign instead of costmap bias.
+      # This prevents the robot spinning off-road on curves with obstacles.
+      #
+      # Tune:
+      #   Raise → if heading-biased spin fires too early on near-straight roads.
+      #   Lower → if robot still spins wrong way on tighter curves.
+      rotate_heading_thresh_deg: 5.0
 
-      # ── A* blend ──────────────────────────────────────────────────────
-      obstacle_blend_threshold: 0.05   # lower = reacts sooner to far obstacles
+      # ── lateral lookahead obstacle bias ───────────────────────────────
+      lateral_offset:   0.8
+      sample_dist_near: 1.0
+      sample_dist_far:  6.0
+      sample_slices:    6
+      nudge_weight:     0.1   # kept for compat, unused
+
+      # ── obstacle blend ────────────────────────────────────────────────
+      # Raised from 0.05 — was far too sensitive, firing bypass on curves
+      # from off-road cost leaking into the unguarded scan arc.
+      obstacle_blend_threshold: 0.25
+
+      # ── lane-bounded gap/bias ─────────────────────────────────────────
+      # Safety margin subtracted from half-lane-width when bounding the
+      # gap scan and lateral cost sample arcs. Keeps scans inside the road.
+      lane_margin_m: 0.3
+      # Minimum free-run width to be treated as a driveable gap.
+      min_gap_width_m: 0.6
+      # Half-width for the gap scan when lane-width cache is not yet warm.
+      # Intentionally small so the scan never looks off-road on startup.
+      door_scan_fallback_half_width: 1.5
+      # Exponential smoothing on obstacle_weight (0=frozen, 1=instant).
+      obstacle_weight_smoothing: 0.3
+      # Flip to -1.0 if robot steers wrong way specifically in GAP_BYPASS.
+      gap_bypass_cte_sign: 1.0
+
+      # ── NEW: gap bypass heading gate ───────────────────────────────────
+      # Rejects gap bypass when the selected gap centroid is on the opposite
+      # side of the road from where the lane heading says the curve goes.
+      #
+      # Problem this solves: on a right curve with an obstacle, the gap
+      # scanner finds free space to the LEFT (off-road / wrong side). Without
+      # this gate, the bypass steers the robot off-road. With it, the bypass
+      # is rejected and the robot follows the lane heading through the curve.
+      #
+      # gap_heading_gate_thresh_deg: minimum |lane_heading| to activate the
+      #   gate. Below this the road is considered straight and both sides
+      #   are accepted.
+      #   Tune: raise if bypass is over-rejected on mild bends;
+      #         lower if wrong-side bypass still fires on your curves.
+      #
+      # gap_heading_gate_tol: gaps whose centroid offset is within this many
+      #   radians of zero are considered "centred" and always accepted,
+      #   regardless of heading sign. Prevents rejecting a truly centred gap
+      #   due to floating-point noise.
+      gap_heading_gate_thresh_deg: 5.0
+      gap_heading_gate_tol:        0.05
+
+      # ── door / gap detection ──────────────────────────────────────────
+      door_scan_dist:       2.0
+      # Reduced from 10.0 — 10 m half-width scanned 20 m wide, deep into
+      # off-road terrain, treating open grass as a driveable gap.
+      door_scan_half_width: 2.0
+      door_scan_slices:     21
+
+      # ── lane width cache ──────────────────────────────────────────────
+      # Low-pass weight for fresh bilateral width readings (0=frozen, 1=raw).
+      # 0.3 means a single noisy detection can't spike the published width.
+      lane_width_alpha: 0.3
+      # Readings outside [min, max] are discarded as speckle / bad fits.
+      lane_width_min_m: 0.5
+      lane_width_max_m: 5.0
+      # After this many consecutive frames with no valid bilateral reading
+      # the cache is cleared and gap/bias fall back to conservative defaults.
+      lane_width_stale_limit: 30
+
+      # ── curve tracking ────────────────────────────────────────────────
+      # When |lane_heading| >= this threshold the robot is on a curve and
+      # uses pure curvature-tracking mode: delta = lane_heading only.
+      # No CTE correction, no gap bypass, no lateral bias — the robot
+      # simply rotates at the angle the road curves and stays in place on
+      # the road surface. Below this threshold full Stanley + gap bypass
+      # applies as normal.
+      #
+      # Tune:
+      #   Raise  → if gentle bends still trigger gap bypass / off-road drift
+      #   Lower  → if lateral drift takes too long to correct near-straights
+      curve_heading_thresh_deg: 10.0
+
+      # ── synthetic straight-ahead path ─────────────────────────────────
+      # setPlan() ignores the A* path and replaces it with this many poses
+      # placed synthetic_wp_spacing metres apart directly ahead of the robot.
+      # computeVelocityCommands walks waypoint_idx_ forward, skipping any
+      # waypoint that is behind the robot OR in a lethal costmap cell, so
+      # nav2's progress_checker always sees forward motion toward a reachable
+      # pose — never toward a blocked A* destination.
+      synthetic_wp_count:   3
+      synthetic_wp_spacing: 1.0
 
       # ── costmap warmup ────────────────────────────────────────────────
-      costmap_warmup_ms: 3000
-      controller_frequency: 20.0 
-      
+      costmap_warmup_ms:    3000
+      controller_frequency: 20.0
+
 
 local_costmap:
   local_costmap:
@@ -79,7 +172,7 @@ local_costmap:
       global_frame: odom
       robot_base_frame: base_link
       rolling_window: true
-      width: 8                        
+      width: 8
       height: 8
       resolution: 0.05
       always_send_full_costmap: true
@@ -96,43 +189,16 @@ local_costmap:
           marking: true
           data_type: "LaserScan"
           raytrace_max_range: 10.0
-          obstacle_max_range: 8.0
+          obstacle_max_range: 5.7
           observation_persistence: 1.0
           expected_update_rate: 8.0
           inf_is_valid: false
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        inflation_radius: 1.2
-        cost_scaling_factor: 2.0
+        inflation_radius: 1.0
+        cost_scaling_factor: 3.0
 
-global_costmap:
-  global_costmap:
-    ros__parameters:
-      use_sim_time: True
-      update_frequency: 9.0
-      publish_frequency: 9.0
-      global_frame: map
-      robot_base_frame: base_link
-      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
-      static_layer:
-        plugin: "nav2_costmap_2d::StaticLayer"
-        map_subscribe_transient_local: True
-      obstacle_layer:
-        plugin: "nav2_costmap_2d::ObstacleLayer"
-        enabled: true
-        observation_sources: scan
-        scan:
-          topic: /scan
-          max_obstacle_height: 2.0
-          clearing: true
-          marking: true
-          data_type: "LaserScan"
-          raytrace_max_range: 8.0
-          obstacle_max_range: 6.0
-          observation_persistence: 0.5
-          expected_update_rate: 8.0
-          inf_is_valid: false
-      inflation_layer:
-        plugin: "nav2_costmap_2d::InflationLayer"
-        inflation_radius: 4.0          # ↑ bigger bubble on global so A* routes wide
-        cost_scaling_factor: 0.9       # ↓ gentler falloff = wider avoidance arc
+# ── global_costmap ────────────────────────────────────────────────────────────
+# Keep global_costmap running (nav2 BT expects it) but it no longer drives
+# steering. The synthetic path in setPlan() ensures the "goal" is always
+# 1-3m ahead in free space, not somewhere across the map through obstacles.
