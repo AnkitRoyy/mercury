@@ -1,21 +1,39 @@
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, ExecuteProcess, TimerAction, DeclareLaunchArgument
+from launch.actions import ExecuteProcess, TimerAction, DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from launch.launch_description_sources import PythonLaunchDescriptionSource
-from ament_index_python.packages import get_package_share_directory
-import os
 
 def generate_launch_description():
 
-    pkg_rplidar = get_package_share_directory('rplidar_ros')
-    rplidar_launch = os.path.join(pkg_rplidar, 'launch', 'rplidar_a3_launch.py')
+    lidar_serial_port_arg = DeclareLaunchArgument(
+        'lidar_serial_port',
+        default_value='/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_47bd82635cda7e44a9f4fb6e59533130-if00-port0'
+    )
+    lidar_serial_port = LaunchConfiguration('lidar_serial_port')
+    teensy_serial_port_arg = DeclareLaunchArgument(
+        'teensy_serial_port',
+        default_value='/dev/serial/by-id/usb-Teensyduino_USB_Serial_19085340-if00'
+    )
+    teensy_serial_port = LaunchConfiguration('teensy_serial_port')
+    gps_serial_port_arg = DeclareLaunchArgument(
+        'gps_serial_port',
+        default_value='/dev/serial/by-id/usb-u-blox_AG_-_www.u-blox.com_u-blox_GNSS_receiver-if00'
+    )
+    gps_serial_port = LaunchConfiguration('gps_serial_port')
 
-    lidar = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(rplidar_launch),
-        launch_arguments={
-            'frame_id': 'laser'
-        }.items()
+    lidar = Node(
+        package='rplidar_ros',
+        executable='rplidar_composition',
+        name='rplidar_composition',
+        output='screen',
+        parameters=[{
+            'serial_port': lidar_serial_port,
+            'serial_baudrate': 256000,
+            'frame_id': 'laser_link',
+            'inverted': False,
+            'angle_compensate': True,
+            'scan_mode': 'Standard',
+        }]
     )
 
     video_device_arg   = DeclareLaunchArgument('video_device', default_value='/dev/video2')
@@ -62,7 +80,7 @@ def generate_launch_description():
             'wheel_radius': 0.075,
             'wheel_separation': 0.44,
             'max_wheel_rpm': 240.0,
-            'serial_port': '/dev/ttyACM0',
+            'serial_port': teensy_serial_port,
             'serial_baud': 115200,
             'enable_serial': True,
             'enable_debug': True,
@@ -75,7 +93,7 @@ def generate_launch_description():
         name='gps',
         output='screen',
         parameters=[{
-            'port': '/dev/ttyACM1',
+            'port': gps_serial_port,
             'baud': 38400,
             'frame_id': 'gps_link',
         }],
@@ -83,7 +101,10 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
-        # lidar,
+        lidar_serial_port_arg,
+        teensy_serial_port_arg,
+        gps_serial_port_arg,
+        lidar,
         video_device_arg,
         auto_exposure_arg,
         exposure_time_arg,

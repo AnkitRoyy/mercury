@@ -22,6 +22,7 @@ ament_python_install_package(${PROJECT_NAME})
 # Install Python executables
 install(PROGRAMS
   hardware/rpm_converter.py
+  hardware/wheel_odom_node.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

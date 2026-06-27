@@ -9,6 +9,7 @@ def generate_launch_description():
     use_sim_time_arg = DeclareLaunchArgument(
         'use_sim_time', default_value='true'
     )
+    use_sim_time = LaunchConfiguration('use_sim_time')
 
     lane_detection_node = Node(
         package='perception',
@@ -16,7 +17,7 @@ def generate_launch_description():
         name='lane_detection_node',
         output='screen',
         parameters=[{
-            'use_sim_time':       True,
+            'use_sim_time':       use_sim_time,
             'image_topic':        '/camera/image_raw',
             'show_debug':         True,
 
@@ -46,7 +47,7 @@ def generate_launch_description():
         name='lane_costmap',
         output='screen',
         parameters=[{
-            'use_sim_time':   True,
+            'use_sim_time':   use_sim_time,
 
             # Map extent — must match global_costmap.yaml
             'map_width_m':    150.0,
@@ -101,7 +102,7 @@ def generate_launch_description():
         name='pothole_costmap',
         output='screen',
         parameters=[{
-            'use_sim_time':          True,
+            'use_sim_time':          use_sim_time,
             'map_width_m':           150.0,
             'map_height_m':          150.0,
             'resolution':             0.10,

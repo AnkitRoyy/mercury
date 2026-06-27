@@ -1,0 +1,27 @@
+navsat_transform_node:
+  ros__parameters:
+    use_sim_time: false
+
+    frequency: 10.0
+    delay: 3.0
+
+    # Set to false to let the first GPS fix define the origin automatically
+    # Set to true + fill datum if you want a fixed field origin
+    wait_for_datum: false
+    # datum: [28.7531, 77.1177, 0.0]   # uncomment for fixed origin
+
+    # Magnetic declination for your field location (Delhi ≈ 0.0 rad)
+    # Compute exact value: https://www.ngdc.noaa.gov/geomag/calculators/magcalc.shtml
+    magnetic_declination_radians: 0.0
+
+    # yaw_offset: robot X=East when 0. Adjust if robot nose ≠ East at startup
+    yaw_offset: 0.0
+
+    zero_altitude: true              # ignore GPS altitude (outdoor flat field)
+    broadcast_utm_transform: false
+    broadcast_utm_transform_as_parent_frame: false
+    publish_filtered_gps: false
+
+    # Use the EKF's fused heading (which includes IMU) rather than GPS-only heading
+    use_odometry_yaw: false
+    use_local_cartesian: false
