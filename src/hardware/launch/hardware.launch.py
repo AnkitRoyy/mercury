@@ -10,11 +10,6 @@ LIDAR_PORT  = '/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_47bd
 TEENSY_PORT = '/dev/serial/by-id/usb-Teensyduino_USB_Serial_19085340-if00'
 GPS_PORT    = '/dev/serial/by-id/usb-u-blox_AG_-_www.u-blox.com_u-blox_GNSS_receiver-if00'
 
-# ─── Camera Config ────────────────────────────────────────────────────────────
-# usb_cam Jazzy has a buffer-overflow segfault in its mjpeg2rgb decoder at
-# resolutions above 640x480. Use yuyv2rgb (stable) until that's patched or
-# we switch to the v4l2_camera package.
-#
 # To test higher res later:  pixel_format='mjpeg2rgb', 1280x720
 # Alternative package:       ros-jazzy-v4l2-camera (handles MJPEG correctly)
 #
@@ -33,15 +28,12 @@ CAM_HEIGHT  = 480
 CAM_FPS     = 30
 CAM_FORMAT  = 'yuyv2rgb'    # stable on Jazzy; switch to mjpeg2rgb once bug is resolved
 
-# Volatile controls — MUST be set before usb_cam opens the device.
-# Changing auto_exposure while streaming causes SIGSEGV in the UVC kernel driver.
 PRE_CTRLS = [
     'auto_exposure=1',              # 1=manual (unlocks exposure_time_absolute)
     'exposure_time_absolute=15',   # 100µs units; 150=15ms — tuned for indoor/outdoor
     'focus_automatic_continuous=0', # disable autofocus hunt
 ]
 
-# Non-volatile controls — safe to apply after streaming starts.
 POST_CTRLS = [
     'brightness=0',                # range 1–64
     'gain=0',                       # range 0–15
@@ -52,13 +44,10 @@ POST_CTRLS = [
 
 def generate_launch_description():
 
-    # ── Args ─────────────────────────────────────────────────────────────────
 
     video_device_arg = DeclareLaunchArgument('video_device', default_value=CAM_DEVICE)
     video_device     = LaunchConfiguration('video_device')
 
-    # ── Phase 1 (t=0s): set volatile controls before device opens ─────────────
-    # Runs a single v4l2-ctl call with all PRE_CTRLS to avoid multiple processes.
 
     pre_cam_setup = ExecuteProcess(
         cmd=['v4l2-ctl', ['--device=', video_device]] +
@@ -67,12 +56,6 @@ def generate_launch_description():
         name='pre_cam_setup',
     )
 
-    # ── Phase 2 (t=1s): launch usb_cam ────────────────────────────────────────
-    # Device opens into a stable manual-exposure state set above.
-    # 3 "unknown control" warnings (white_balance_temperature_auto, exposure_auto,
-    # focus_auto) are hardcoded in usb_cam's C++ — different UVC name mapping than
-    # this camera's v4l2 names. They are harmless and cannot be suppressed without
-    # patching usb_cam source.
 
     usb_cam = TimerAction(
         period=1.0,
@@ -94,9 +77,6 @@ def generate_launch_description():
         )],
     )
 
-    # ── Phase 3 (t=3s): apply non-volatile tweaks ────────────────────────────
-    # Single v4l2-ctl call — cleaner than spawning 4 separate processes.
-
     post_cam_ctrls = TimerAction(
         period=3.0,
         actions=[ExecuteProcess(
@@ -106,8 +86,6 @@ def generate_launch_description():
             name='post_cam_ctrls',
         )],
     )
-
-    # ── Hardware nodes (uncomment to enable) ─────────────────────────────────
 
     lidar_serial_port_arg  = DeclareLaunchArgument('lidar_serial_port',  default_value=LIDAR_PORT)
     teensy_serial_port_arg = DeclareLaunchArgument('teensy_serial_port', default_value=TEENSY_PORT)
@@ -157,15 +135,13 @@ def generate_launch_description():
         remappings=[('fix', '/gps')],
     )
 
-    # ── Launch description ────────────────────────────────────────────────────
 
     return LaunchDescription([
-        # Camera (3-phase startup to prevent SIGSEGV)
         video_device_arg,
-        pre_cam_setup,      # t=0s  volatile controls before device opens
-        usb_cam,            # t=1s  device opens into stable state
-        post_cam_ctrls,     # t=3s  non-volatile tweaks while streaming
+        pre_cam_setup,      
+        usb_cam,            
+        post_cam_ctrls,     
         lidar_serial_port_arg, lidar,
-        # teensy_serial_port_arg, teensy,
-        # gps_serial_port_arg, gps,
+        teensy_serial_port_arg, teensy,
+        gps_serial_port_arg, gps,
     ])
