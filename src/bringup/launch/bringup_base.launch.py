@@ -64,7 +64,7 @@ def generate_launch_description():
         parameters=[{
             'use_sim_time':          True,
             'carrot_dist_m':         4.8,
-            'goal_tolerance':        0.15,
+            'goal_tolerance':        0.5,
             'publish_rate':          2.0,
             'camera_hfov':           1.047,
             'image_width':           640,
