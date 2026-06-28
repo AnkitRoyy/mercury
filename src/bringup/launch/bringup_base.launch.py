@@ -13,6 +13,21 @@ def generate_launch_description():
         description='Path to the xacro file'
     )
 
+    declare_use_sim_time_arg = DeclareLaunchArgument(
+        'use_sim_time',
+        default_value='false',
+        description='Use simulation (Gazebo) clock if true'
+    )
+
+    declare_localization_launch_arg = DeclareLaunchArgument(
+        'localization_launch',
+        default_value='localization.launch.py',
+        description='Localization launch file to include'
+    )
+
+    use_sim_time = LaunchConfiguration('use_sim_time')
+    localization_launch = LaunchConfiguration('localization_launch')
+
     description = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             PathJoinSubstitution([
@@ -22,7 +37,8 @@ def generate_launch_description():
             ])
         ),
         launch_arguments={
-            'xacro_file': LaunchConfiguration('xacro_file')
+            'xacro_file':    LaunchConfiguration('xacro_file'),
+            'use_sim_time':  use_sim_time,
         }.items()
     )
 
@@ -31,9 +47,10 @@ def generate_launch_description():
             PathJoinSubstitution([
                 FindPackageShare('localization'),
                 'launch',
-                'localization.launch.py'
+                localization_launch
             ])
-        )
+        ),
+        launch_arguments={'use_sim_time': use_sim_time}.items()
     )
 
     planning = IncludeLaunchDescription(
@@ -43,7 +60,8 @@ def generate_launch_description():
                 'launch',
                 'planning.launch.py'
             ])
-        )
+        ),
+        launch_arguments={'use_sim_time': use_sim_time}.items()
     )
 
     perception = IncludeLaunchDescription(
@@ -53,7 +71,8 @@ def generate_launch_description():
                 'launch',
                 'perception.launch.py'
             ])
-        )
+        ),
+        launch_arguments={'use_sim_time': use_sim_time}.items()
     )
 
     lane_bev_carrot_node = Node(
@@ -62,7 +81,7 @@ def generate_launch_description():
         name='lane_bev_carrot',
         output='screen',
         parameters=[{
-            'use_sim_time':          True,
+            'use_sim_time':          use_sim_time,
             'carrot_dist_m':         4.8,
             'goal_tolerance':        0.15,
             'publish_rate':          2.0,
@@ -84,7 +103,7 @@ def generate_launch_description():
         package='rviz2',
         executable='rviz2',
         name='rviz2',
-        parameters=[{'use_sim_time': True}],
+        parameters=[{'use_sim_time': use_sim_time}],
         arguments=['-d', PathJoinSubstitution([
             FindPackageShare('bringup'),
             'config',
@@ -95,10 +114,12 @@ def generate_launch_description():
 
     return LaunchDescription([
         declare_xacro_file_arg,
+        declare_use_sim_time_arg,
+        declare_localization_launch_arg,
         description,
         localization,
         planning,
         perception,
-        lane_bev_carrot_node,   
+        lane_bev_carrot_node,
         rviz_node,
     ])

@@ -1,72 +1,125 @@
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, ExecuteProcess, TimerAction, DeclareLaunchArgument
+from launch.actions import ExecuteProcess, TimerAction, DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from launch.launch_description_sources import PythonLaunchDescriptionSource
-from ament_index_python.packages import get_package_share_directory
-import os
+
+
+# ─── Serial Port Defaults ────────────────────────────────────────────────────
+
+LIDAR_PORT  = '/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_47bd82635cda7e44a9f4fb6e59533130-if00-port0'
+TEENSY_PORT = '/dev/serial/by-id/usb-Teensyduino_USB_Serial_19085340-if00'
+GPS_PORT    = '/dev/serial/by-id/usb-u-blox_AG_-_www.u-blox.com_u-blox_GNSS_receiver-if00'
+
+# To test higher res later:  pixel_format='mjpeg2rgb', 1280x720
+# Alternative package:       ros-jazzy-v4l2-camera (handles MJPEG correctly)
+#
+# Angetube v4l2 control ranges:
+#   auto_exposure            : 1=manual, 3=auto  (default=3)  ← set PRE-stream
+#   exposure_time_absolute   : 1–5000 (100µs)    (default=100)← set PRE-stream
+#   focus_automatic_continuous: bool             (default=1)  ← set PRE-stream
+#   brightness               : 1–64              (default=30)
+#   gain                     : 0–15              (default=0)
+#   backlight_compensation   : 0–7               (default=0)
+#   power_line_frequency     : 0=off,1=50Hz,2=60Hz (default=1)
+
+CAM_DEVICE  = '/dev/video2'
+CAM_WIDTH   = 640
+CAM_HEIGHT  = 480
+CAM_FPS     = 30
+CAM_FORMAT  = 'yuyv2rgb'    # stable on Jazzy; switch to mjpeg2rgb once bug is resolved
+
+PRE_CTRLS = [
+    'auto_exposure=1',              # 1=manual (unlocks exposure_time_absolute)
+    'exposure_time_absolute=15',   # 100µs units; 150=15ms — tuned for indoor/outdoor
+    'focus_automatic_continuous=0', # disable autofocus hunt
+]
+
+POST_CTRLS = [
+    'brightness=0',                # range 1–64
+    'gain=0',                       # range 0–15
+    'backlight_compensation=0',     # 0=off
+    'power_line_frequency=1',       # 1=50Hz (India)
+]
+
 
 def generate_launch_description():
 
-    pkg_rplidar = get_package_share_directory('rplidar_ros')
-    rplidar_launch = os.path.join(pkg_rplidar, 'launch', 'rplidar_a3_launch.py')
 
-    lidar = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(rplidar_launch),
-        launch_arguments={
-            'frame_id': 'laser'
-        }.items()
+    video_device_arg = DeclareLaunchArgument('video_device', default_value=CAM_DEVICE)
+    video_device     = LaunchConfiguration('video_device')
+
+
+    pre_cam_setup = ExecuteProcess(
+        cmd=['v4l2-ctl', ['--device=', video_device]] +
+            [f'--set-ctrl={c}' for c in PRE_CTRLS],
+        output='screen',
+        name='pre_cam_setup',
     )
 
-    video_device_arg   = DeclareLaunchArgument('video_device', default_value='/dev/video2')
-    auto_exposure_arg  = DeclareLaunchArgument('auto_exposure', default_value='1')
-    exposure_time_arg  = DeclareLaunchArgument('exposure_time_absolute', default_value='50')
-    brightness_arg     = DeclareLaunchArgument('brightness', default_value='1')
-    gain_arg           = DeclareLaunchArgument('gain', default_value='1')
-    backlight_arg      = DeclareLaunchArgument('backlight_compensation', default_value='0')
-    video_device       = LaunchConfiguration('video_device')
 
-    usb_cam = Node(
-        package='usb_cam',
-        executable='usb_cam_node_exe',
-        name='usb_cam_node',
+    usb_cam = TimerAction(
+        period=1.0,
+        actions=[Node(
+            package='usb_cam',
+            executable='usb_cam_node_exe',
+            name='usb_cam_node',
+            output='screen',
+            parameters=[{
+                'video_device': video_device,
+                'pixel_format': CAM_FORMAT,
+                'image_width':  CAM_WIDTH,
+                'image_height': CAM_HEIGHT,
+                'framerate':    float(CAM_FPS),
+                'brightness':   32,
+                'gain':         0,
+            }],
+            remappings=[('image_raw', '/camera/image_raw')],
+        )],
+    )
+
+    post_cam_ctrls = TimerAction(
+        period=3.0,
+        actions=[ExecuteProcess(
+            cmd=['v4l2-ctl', ['--device=', video_device]] +
+                [f'--set-ctrl={c}' for c in POST_CTRLS],
+            output='screen',
+            name='post_cam_ctrls',
+        )],
+    )
+
+    lidar_serial_port_arg  = DeclareLaunchArgument('lidar_serial_port',  default_value=LIDAR_PORT)
+    teensy_serial_port_arg = DeclareLaunchArgument('teensy_serial_port', default_value=TEENSY_PORT)
+    gps_serial_port_arg    = DeclareLaunchArgument('gps_serial_port',    default_value=GPS_PORT)
+
+    lidar = Node(
+        package='rplidar_ros',
+        executable='rplidar_composition',
+        name='rplidar_composition',
         output='screen',
         parameters=[{
-            'video_device': video_device,
-            'pixel_format': 'yuyv',
-            'image_width': 640,
-            'image_height': 480,
+            'serial_port':      LaunchConfiguration('lidar_serial_port'),
+            'serial_baudrate':  256000,
+            'frame_id':         'laser_link',
+            'inverted':         False,
+            'angle_compensate': True,
+            'scan_mode':        'Standard',
         }],
-        remappings=[('image_raw', '/camera/image_raw')]
     )
 
-    v4l2_ctrls = TimerAction(
-        period=3.0,
-        actions=[
-            ExecuteProcess(cmd=['v4l2-ctl', ['--device=', video_device], ['--set-ctrl=auto_exposure=', LaunchConfiguration('auto_exposure')]], output='screen'),
-            ExecuteProcess(cmd=['v4l2-ctl', ['--device=', video_device], ['--set-ctrl=exposure_time_absolute=', LaunchConfiguration('exposure_time_absolute')]], output='screen'),
-            ExecuteProcess(cmd=['v4l2-ctl', ['--device=', video_device], ['--set-ctrl=brightness=', LaunchConfiguration('brightness')]], output='screen'),
-            ExecuteProcess(cmd=['v4l2-ctl', ['--device=', video_device], ['--set-ctrl=gain=', LaunchConfiguration('gain')]], output='screen'),
-            ExecuteProcess(cmd=['v4l2-ctl', ['--device=', video_device], ['--set-ctrl=backlight_compensation=', LaunchConfiguration('backlight_compensation')]], output='screen'),
-            ExecuteProcess(cmd=['v4l2-ctl', ['--device=', video_device], '--set-ctrl=power_line_frequency=1'], output='screen'),
-        ]
-    )
-
-    # Teensy RPM converter for motor control via serial (micro USB)
     teensy = Node(
         package='hardware',
         executable='rpm_converter.py',
         name='teensy',
         output='screen',
         parameters=[{
-            'wheel_radius': 0.075,
+            'wheel_radius':     0.075,
             'wheel_separation': 0.44,
-            'max_wheel_rpm': 240.0,
-            'serial_port': '/dev/ttyACM0',
-            'serial_baud': 115200,
-            'enable_serial': True,
-            'enable_debug': True,
-        }]
+            'max_wheel_rpm':    240.0,
+            'serial_port':      LaunchConfiguration('teensy_serial_port'),
+            'serial_baud':      115200,
+            'enable_serial':    True,
+            'enable_debug':     True,
+        }],
     )
 
     gps = Node(
@@ -75,23 +128,20 @@ def generate_launch_description():
         name='gps',
         output='screen',
         parameters=[{
-            'port': '/dev/ttyACM1',
-            'baud': 38400,
+            'port':     LaunchConfiguration('gps_serial_port'),
+            'baud':     38400,
             'frame_id': 'gps_link',
         }],
-        remappings=[('fix', '/gps')]
+        remappings=[('fix', '/gps')],
     )
 
+
     return LaunchDescription([
-        # lidar,
         video_device_arg,
-        auto_exposure_arg,
-        exposure_time_arg,
-        brightness_arg,
-        gain_arg,
-        backlight_arg,
-        usb_cam,
-        v4l2_ctrls,
-        teensy,
-        gps,  
+        pre_cam_setup,      
+        usb_cam,            
+        post_cam_ctrls,     
+        lidar_serial_port_arg, lidar,
+        teensy_serial_port_arg, teensy,
+        gps_serial_port_arg, gps,
     ])
