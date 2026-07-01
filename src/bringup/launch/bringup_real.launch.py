@@ -29,7 +29,9 @@ def generate_launch_description():
             ])
         ),
         launch_arguments={
-            'xacro_file': xacro_file
+            'xacro_file': xacro_file,
+            'use_sim_time': 'false',
+            'localization_launch': 'real_localization.launch.py',
         }.items()
     )
 
