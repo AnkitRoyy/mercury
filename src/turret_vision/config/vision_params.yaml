@@ -8,10 +8,11 @@ recognition:
 
 scanner:
   ros__parameters:
-    # Scan grid: 7 pan × 3 tilt = 21 positions
     h_positions_deg: [-120.0, -80.0, -40.0, 0.0, 40.0, 80.0, 120.0]
-    v_positions_deg: [20.0, 0.0, -20.0]
-    settle_time_sec: 0.6
+    v_positions_deg: [0.0, 20.0, 40.0]
+  
+    settle_time_sec: 0.5
+    hold_time_sec: 0.3
     fine_tune_px_tol: 20.0
     fine_tune_gain_h: 0.05
     fine_tune_gain_v: 0.05
@@ -21,8 +22,12 @@ scanner:
 turret:
   ros__parameters:
     # For real hardware (Arduino/ESP32 over serial)
-    serial_port: "/dev/ttyUSB1"
+    serial_port: "/dev/ttyACM0"
     baud_rate: 115200
+    pan_center: 0
+    pan_scale: 1.0
+    tilt_center: 0
+    tilt_scale: 1.0
     # Auto-detects simulation if Gazebo bridge is available
     # Set dry_run: true to only log commands (no serial)
     dry_run: false
