@@ -34,7 +34,7 @@
     <include>
       <uri>model://ugvc_track</uri>
       <name>ugvc_track</name>
-      <pose>0 0 0.01 1.5708 0 0</pose>
+      <pose>0 0 0.01 0 0 0</pose>
     </include>
 
     <spherical_coordinates>
@@ -99,7 +99,7 @@
     <!-- photo 1 -->
     <model name="photo_1">
       <static>true</static>
-      <pose>-6.0 -42.0 1.5 0 0 1.5708</pose>
+      <pose>-2.29 -29.39 1.5 0 0 -0.6</pose>
       <link name="link">
         <visual name="photo">
           <geometry><box><size>0.02 1.5 1.5</size></box></geometry>
@@ -120,7 +120,7 @@
     <!-- photo 2  (START_Y + 1*STEP_Y) -->
     <model name="photo_2">
       <static>true</static>
-      <pose>-3.0 -42.0 1.5 0 0 1.5708</pose>
+      <pose>-0.67 -27.84 1.5 0 0 -1.0845</pose>
       <link name="link">
         <visual name="photo">
           <geometry><box><size>0.02 1.5 1.5</size></box></geometry>
@@ -141,7 +141,7 @@
     <!-- photo 3  (START_Y + 2*STEP_Y) -->
     <model name="photo_3">
       <static>true</static>
-      <pose>0.0 -42.0 1.5 0 0 1.5708</pose>
+      <pose>1.39 -26.89 1.5 0 0 1.5708</pose>
       <link name="link">
         <visual name="photo">
           <geometry><box><size>0.02 1.5 1.5</size></box></geometry>
@@ -162,7 +162,7 @@
     <!-- photo 4  (START_Y + 3*STEP_Y) -->
     <model name="photo_4">
       <static>true</static>
-      <pose>3.0 -42.0 1.5 0 0 1.5708</pose>
+      <pose>3.48 -26.94 1.5 0 0 1.5708</pose>
       <link name="link">
         <visual name="photo">
           <geometry><box><size>0.02 1.5 1.5</size></box></geometry>
@@ -183,7 +183,7 @@
     <!-- photo 5  (START_Y + 4*STEP_Y) -->
     <model name="photo_5">
       <static>true</static>
-      <pose>6.0 -42.0 1.5 0 0 1.5708</pose>
+      <pose>5.87 -27.5 1.5 0 0 1.0845</pose>
       <link name="link">
         <visual name="photo">
           <geometry><box><size>0.02 1.5 1.5</size></box></geometry>
@@ -204,7 +204,7 @@
     <!-- photo 6  (START_Y + 5*STEP_Y) -->
     <model name="photo_6">
       <static>true</static>
-      <pose>9.0 -42.0 1.5 0 0 1.5708</pose>
+      <pose>7.40 -29.0 1.5 0 0 0.6</pose>
       <link name="link">
         <visual name="photo">
           <geometry><box><size>0.02 1.5 1.5</size></box></geometry>

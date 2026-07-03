@@ -1,4 +1,0 @@
-rm -rf install log build
-colcon build
-source install/setup.bash
-ros2 launch bringup bringup_sim.launch.py
