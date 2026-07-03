@@ -57,6 +57,7 @@ class ScannerNode(Node):
         self.declare_parameter('fine_tune_gain_h', 0.05)
         self.declare_parameter('fine_tune_gain_v', 0.05)
         self.declare_parameter('fine_tune_timeout', 5.0)
+        self.declare_parameter('fine_tune_settle_step_sec', 0.3)
         self.declare_parameter('laser_on_time_sec', 3.0)
 
         self._h_pos = list(self.get_parameter('h_positions_deg').value)
@@ -67,6 +68,7 @@ class ScannerNode(Node):
         self._gain_h = self.get_parameter('fine_tune_gain_h').value
         self._gain_v = self.get_parameter('fine_tune_gain_v').value
         self._ft_timeout = self.get_parameter('fine_tune_timeout').value
+        self._ft_settle_step = self.get_parameter('fine_tune_settle_step_sec').value
         self._laser_time = self.get_parameter('laser_on_time_sec').value
 
         # Build 21-position scan grid (boustrophedon).
@@ -246,11 +248,29 @@ class ScannerNode(Node):
     def _run_fine_tune(self):
         elapsed = time.time() - self._ft_start
 
+        if not hasattr(self, '_ft_settle_until'):
+            # First tick after entering FINE_TUNE: nothing has moved yet,
+            # so there's nothing to wait on. Allow immediate capture.
+            self._ft_settle_until = 0.0
+
+        now = time.time()
+
+        # ── Settle gate ────────────────────────────────────────────────────
+        # Servos take real time to physically travel. Previously we fired a
+        # fresh correction on every 10Hz tick regardless of whether the last
+        # correction had actually landed, so the controller was reacting to
+        # frames captured mid-motion — that's what caused the oscillation /
+        # divergence (pan and tilt slamming into their clamps repeatedly).
+        # Now: don't request a capture or apply a new correction until the
+        # settle window from the LAST move has elapsed.
+        if now < self._ft_settle_until:
+            return
+
         if not hasattr(self, '_ft_last_capture'):
             self._ft_last_capture = 0.0
-        if time.time() - self._ft_last_capture >= 0.2:
+        if now - self._ft_last_capture >= 0.2:
             self._pub_capture.publish(Bool(data=True))
-            self._ft_last_capture = time.time()
+            self._ft_last_capture = now
 
         h_ok = abs(self._h_err) <= self._tol
         v_ok = abs(self._v_err) <= self._tol
@@ -262,11 +282,23 @@ class ScannerNode(Node):
             self._fire_start = time.time()
             return
 
-        new_pan = self._cur_pan - self._gain_h * self._h_err
-        new_tilt = self._cur_tilt - self._gain_v * self._v_err
-        new_pan = max(-120.0, min(120.0, new_pan))
-        new_tilt = max(0.0, min(100.0, new_tilt))
+        # ── Delta clamp ───────────────────────────────────────────────────
+        # Cap how much a single correction can move the turret, so one bad
+        # frame (mid-motion blur, momentary misdetection) can't fling it
+        # across the whole range in one step.
+        max_step_deg = 8.0
+
+        raw_pan_delta = self._gain_h * self._h_err
+        raw_tilt_delta = -self._gain_v * self._v_err
+        pan_delta = max(-max_step_deg, min(max_step_deg, raw_pan_delta))
+        tilt_delta = max(-max_step_deg, min(max_step_deg, raw_tilt_delta))
+
+        new_pan = max(-116.0, min(116.0, self._cur_pan + pan_delta))
+        new_tilt = max(0.0, min(100.0, self._cur_tilt + tilt_delta))
         self._move_turret(new_pan, new_tilt)
+
+        # Wait for the servo to physically arrive before reacting again.
+        self._ft_settle_until = now + self._ft_settle_step
 
     def _run_fire(self):
         if time.time() - self._fire_start < self._laser_time:
@@ -289,7 +321,7 @@ class ScannerNode(Node):
         self._match_found = False
         self._h_err = 0.0
         self._v_err = 0.0
-        for attr in ('_scan_step', '_ft_last_capture', '_capture_sent_t'):
+        for attr in ('_scan_step', '_ft_last_capture', '_capture_sent_t', '_ft_settle_until'):
             if hasattr(self, attr):
                 delattr(self, attr)
 

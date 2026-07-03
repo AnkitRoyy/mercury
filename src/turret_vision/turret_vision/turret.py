@@ -18,21 +18,16 @@ class TurretNode(Node):
         self.declare_parameter('serial_port', '/dev/ttyACM0')
         self.declare_parameter('baud_rate', 115200)
         self.declare_parameter('dry_run', False)
-        # Degrees-per-pixel-error gain for fine-tune (error is in px)
-        self.declare_parameter('fine_tune_gain_h', 0.05)
-        self.declare_parameter('fine_tune_gain_v', 0.05)
 
         port = self.get_parameter('serial_port').value
         baud = self.get_parameter('baud_rate').value
         self.dry_run = self.get_parameter('dry_run').value
-        self._gain_h = self.get_parameter('fine_tune_gain_h').value
-        self._gain_v = self.get_parameter('fine_tune_gain_v').value
 
         self._laser_on = False
         self._fine_tune_active = False
 
         # Track current commanded position in DEGREES (matches firmware's
-        # calibrated PAN:/TILT: format: pan +120..-120, tilt 0..40ish)
+        # calibrated PAN:/TILT: format: pan +116..-116, tilt 0..40ish)
         self._cur_pan_deg = 0.0
         self._cur_tilt_deg = 0.0
 
@@ -80,21 +75,17 @@ class TurretNode(Node):
             10
         )
 
-        # ── Legacy pixel-error topics (kept for compatibility, routed through
-        #    the same calibrated degree path instead of raw P/T) ──
-        self.create_subscription(
-            Float32,
-            '/horizontal_error',
-            self._herr_cb,
-            10
-        )
-
-        self.create_subscription(
-            Float32,
-            '/vertical_error',
-            self._verr_cb,
-            10
-        )
+        # NOTE: /horizontal_error and /vertical_error are intentionally NOT
+        # subscribed to here anymore. turret.py previously ran its own
+        # independent proportional controller off these raw topics AT THE
+        # SAME TIME scanner.py's fine-tune state machine was computing and
+        # publishing /pan_deg + /tilt_deg. Both were gated by the same
+        # /fine_tune_active flag, so once fine-tune started, two separate
+        # uncoordinated control loops were both moving the turret and
+        # overwriting each other's target position — that's what caused the
+        # divergence/oscillation seen on hardware. scanner.py is now the
+        # SOLE owner of fine-tune correction logic; turret.py only ever
+        # translates /pan_deg + /tilt_deg (absolute degrees) to serial.
 
         # Optional laser topic
         self.create_subscription(
@@ -104,10 +95,9 @@ class TurretNode(Node):
             10
         )
 
-        # Gate for pixel-error fine-tune: only act on /horizontal_error and
-        # /vertical_error when scanner says we're actually in FINE_TUNE.
-        # Otherwise a stray face in-frame during the 21-position grid scan
-        # would nudge the servo off its commanded grid position.
+        # Tracks scanner's fine-tune state for logging/visibility only.
+        # No longer gates anything in this node — turret.py doesn't compute
+        # corrections anymore, it just relays /pan_deg + /tilt_deg.
         self.create_subscription(
             Bool,
             '/fine_tune_active',
@@ -136,33 +126,12 @@ class TurretNode(Node):
             f'Fine-tune active: {self._fine_tune_active}'
         )
 
-    # ── Pixel-error fine-tune (converted to degree deltas, same serial path) ─
-    # Only applied when scanner has confirmed a match and entered FINE_TUNE.
-    # During the 21-position grid scan this flag is False, so any face
-    # detected mid-sweep is ignored and does not move the turret off-grid.
-    def _herr_cb(self, msg: Float32):
-        if not self._fine_tune_active:
-            return
-
-        error = msg.data
-        delta = -self._gain_h * error
-        self._cur_pan_deg = max(-120.0, min(120.0, self._cur_pan_deg + delta))
-        self.get_logger().info(
-            f'H error={error:.1f} -> pan_deg={self._cur_pan_deg:.1f}'
-        )
-        self._send_pan_tilt()
-
-    def _verr_cb(self, msg: Float32):
-        if not self._fine_tune_active:
-            return
-
-        error = msg.data
-        delta = -self._gain_v * error
-        self._cur_tilt_deg = max(0.0, min(100.0, self._cur_tilt_deg + delta))
-        self.get_logger().info(
-            f'V error={error:.1f} -> tilt_deg={self._cur_tilt_deg:.1f}'
-        )
-        self._send_pan_tilt()
+    # ── Pixel-error fine-tune: REMOVED ────────────────────────────────────
+    # _herr_cb / _verr_cb used to independently drive the turret off raw
+    # /horizontal_error and /vertical_error. Deleted — scanner.py's
+    # FINE_TUNE state machine is the only thing allowed to compute
+    # corrections; it publishes the result as /pan_deg and /tilt_deg,
+    # which _pan_deg_cb / _tilt_deg_cb above already handle.
 
     def _laser_cb(self, msg: Bool):
 
@@ -183,7 +152,7 @@ class TurretNode(Node):
 
     def _send_pan_tilt(self):
         # Uses the firmware's calibrated "PAN:<deg>,TILT:<deg>" format,
-        # which applies moveTurret()'s 87 - 0.725*panDeg / 80 + tiltDeg
+        # which applies moveTurret()'s 87 - 0.75*panDeg / 80 + tiltDeg
         # mapping on the Arduino side. Do NOT also scale here — that
         # would double-convert and scramble positions again.
         cmd = f'PAN:{self._cur_pan_deg:.1f},TILT:{self._cur_tilt_deg:.1f}'

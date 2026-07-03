@@ -8,14 +8,23 @@ recognition:
 
 scanner:
   ros__parameters:
-    h_positions_deg: [-120.0, -80.0, -40.0, 0.0, 40.0, 80.0, 120.0]
+    # Pan range re-derived from real servo calibration:
+    # center write=87, usable write range 0-174, 0.75 write-units/deg
+    # => physical pan range is ±116°, not ±120°.
+    h_positions_deg: [-116.0, -80.0, -40.0, 0.0, 40.0, 80.0, 116.0]
     v_positions_deg: [0.0, 20.0, 40.0]
-  
+
     settle_time_sec: 0.5
     hold_time_sec: 0.3
     fine_tune_px_tol: 20.0
-    fine_tune_gain_h: 0.05
-    fine_tune_gain_v: 0.05
+    # Lowered from 0.05: on the real rig this was producing 5-12deg swings
+    # per correction on typical 100-250px errors, faster than the servo
+    # could physically settle -> oscillation, never converged.
+    fine_tune_gain_h: 0.02
+    fine_tune_gain_v: 0.02
+    # Minimum time to wait after each correction before reacting again,
+    # so we don't act on frames captured mid-servo-motion.
+    fine_tune_settle_step_sec: 0.3
     fine_tune_timeout: 5.0
     laser_on_time_sec: 3.0
 
