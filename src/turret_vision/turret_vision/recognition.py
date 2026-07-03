@@ -138,7 +138,7 @@ class RecognitionNode(Node):
         matched = best_sim >= self.threshold
 
         if matched:
-            save_path = os.path.join(os.path.expanduser('~'), 'mercury', 'best_match.jpg') #change
+            save_path = os.path.join(os.path.expanduser('~'), 'probes', 'mercury', 'best_match.jpg') #change
             x1, y1, x2, y2 = map(int, best_face.bbox)
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
             cv2.putText(frame, f'sim={best_sim:.3f}', (x1, y1-10),

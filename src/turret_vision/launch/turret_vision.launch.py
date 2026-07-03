@@ -47,7 +47,7 @@ def generate_launch_description() -> LaunchDescription:
     
     target_image_arg = DeclareLaunchArgument(
         'target_image',
-        default_value='/home/lakshya-jindal/mercury/data/target.jpg',
+        default_value='/home/soap/probes/mercury/data/target.jpg',
         description='Path to target face image'
     )
     
