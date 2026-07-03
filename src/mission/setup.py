@@ -33,6 +33,14 @@ setup(
             ),
             glob("config/*"),
         ),
+        (
+            os.path.join(
+                "share",
+                package_name,
+                "scripts"
+            ),
+            glob("scripts/*.py"),
+        ),
     ],
     install_requires=["setuptools"],
     zip_safe=True,
@@ -49,6 +57,8 @@ setup(
         "console_scripts": [
             "mission_setup = mission.mission_setup:main",
             "waypoint_sender = mission.waypoint_sender:main",
+            "convert_gps_waypoints = scripts.convert_gps_waypoints:main",
+            "gps_datum_injector = mission.gps_datum_injector:main",
         ],
     },
 )

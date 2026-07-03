@@ -56,7 +56,7 @@ class RecognitionNode(Node):
         self._latest_frame = None
 
         # ── Subscribers ───────────────────────────────────────────────────────
-        self.create_subscription(Image, '/image_raw', self._image_cb, 10)
+        self.create_subscription(Image, '/camera/image_raw', self._image_cb, 10)
         self.create_subscription(Bool, '/capture_request', self._capture_cb, 10)
 
         # ── Publishers ────────────────────────────────────────────────────────

@@ -38,7 +38,9 @@ controller_server:
 
     goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.5
+      # Generous tolerances — the gate plane logic in goal_decomposer
+      # handles WP completion, not Nav2's goal checker.
+      xy_goal_tolerance: 0.25
       yaw_goal_tolerance: 0.8
       stateful: True
 

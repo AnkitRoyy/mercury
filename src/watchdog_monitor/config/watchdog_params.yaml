@@ -54,10 +54,10 @@ waypoints:
   ros__parameters:
     # Waypoints in map/world frame coordinates [x1, y1, x2, y2, ...]
     # HOME (4th waypoint) is appended at runtime by mission_setup.py
-    waypoints: [15.57, -35.36, 2.58, -31.84, -11.21, -35.05]
+    waypoints: [15.57, -35.36, 1.59, -35.37, -11.21, -35.05]
     waypoint_names: ["WP-1", "WP-2", "WP-3"]
     # Arrival detection radius (metres)
-    arrival_radius: 2.0
+    arrival_radius: 0.5
     # How often to publish status summary (seconds)
     status_interval: 0.5
     # Odometry topic

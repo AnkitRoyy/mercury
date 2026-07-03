@@ -23,6 +23,7 @@ ament_python_install_package(${PROJECT_NAME})
 install(PROGRAMS
   hardware/rpm_converter.py
   hardware/wheel_odom_node.py
+  hardware/cmd_vel_odom_node.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

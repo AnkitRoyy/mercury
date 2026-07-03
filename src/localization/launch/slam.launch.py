@@ -26,11 +26,11 @@ def generate_launch_description():
             'mode': 'mapping',
             'resolution': 0.05,
             'max_laser_range': 10.0,
-            'minimum_travel_distance': 0.02,
-            'minimum_travel_heading': 0.02,
+            'minimum_travel_distance': 0.05,
+            'minimum_travel_heading': 0.05,
             'scan_queue_size': 20,
-            'throttle_scans': 1,
-            'map_update_interval': 0.3,
+            'throttle_scans': 2,
+            'map_update_interval': 1.0,
             'transform_timeout': 0.2,
             'tf_buffer_duration': 30.0
         }]

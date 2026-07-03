@@ -1,0 +1,35 @@
+##############################################################################
+# gps_waypoints.yaml
+# ===================
+# Store your REAL-WORLD GPS waypoints here.
+# The gps_datum_injector node reads this at startup, waits for a GPS fix
+# from /gps to establish the datum (= map-frame 0,0), then converts every
+# entry below into local (x, y) and writes them into mission_params.yaml
+# automatically.
+#
+# Format:
+#   Each waypoint is:  [NAME, latitude, longitude]
+#
+# HOW TO FILL THIS IN:
+#   1. Walk to each competition waypoint with a handheld GPS or phone.
+#   2. Record the lat/lon for each.
+#   3. Put them in order below (WP-1, WP-2, WP-3 …).
+#   Do NOT touch mission_params.yaml waypoints — they will be overwritten.
+##############################################################################
+
+gps_datum_injector:
+  ros__parameters:
+
+    # GPS topic published by your hardware driver
+    gps_topic: /gps
+
+    # Number of consecutive fixes to average for a stable datum
+    # (set to 1 for fastest startup, higher = more accurate datum)
+    datum_avg_samples: 5
+
+    # Real-world GPS waypoints — fill in before each competition
+    # Format: [NAME, latitude, longitude]
+    gps_waypoints:
+      - [WP-1, 28.75325, 77.11790]
+      - [WP-2, 28.75310, 77.11800]
+      - [WP-3, 28.75290, 77.11770]

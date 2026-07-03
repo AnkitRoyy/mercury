@@ -2,13 +2,15 @@
 real_localization.launch.py
 ============================
 Real-hardware EKF localization pipeline:
+  /cmd_vel          →  cmd_vel_odom_node  →  /odom  ─┐
+  /imu (Madgwick)   ─────────────────────────────────┼→  ekf_filter_node  →  /odometry/filtered
+  /gps  →  navsat_transform_node  →  /odometry/gps  ─┘         ↓
+                                                            /tf  odom→base_link
 
-  /wheel_encoders  →  wheel_odom_node  →  /odom  ─┐
-  /imu             ──────────────────────────────── ┼→  ekf_filter_node  →  /odometry/filtered
-  /gps  →  navsat_transform_node  →  /odometry/gps ─┘         ↓
-                                                           /tf  odom→base_link
+NOTE: cmd_vel_odom_node is OPEN-LOOP (no encoders). Its /odom carries a
+trusted twist (mirrors /cmd_vel) and an untrusted pose (covariance 1e6).
+ekf_real.yaml's odom0_config must only fuse vx/vy/vyaw from it, never x/y.
 """
-
 import os
 from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription
@@ -25,20 +27,15 @@ def generate_launch_description():
     ekf_yaml    = os.path.join(pkg_loc, 'config', 'ekf_real.yaml')
     navsat_yaml = os.path.join(pkg_loc, 'config', 'navsat_real.yaml')
 
-    # ── 1. Wheel odometry ─────────────────────────────────────────────────────
-    wheel_odom = Node(
+    # ── 1. Odometry source (open-loop, cmd_vel-based — no encoders) ───────
+    cmd_vel_odom = Node(
         package='hardware',
-        executable='wheel_odom_node.py',
-        name='wheel_odom_node',
+        executable='cmd_vel_odom_node.py',
+        name='cmd_vel_odom_node',
         output='screen',
-        parameters=[{
-            'wheel_radius':     0.075,
-            'wheel_separation': 0.44,
-            'publish_tf':       False,   # EKF publishes odom→base_link TF
-        }]
     )
 
-    # ── 2. EKF (odom + IMU + GPS-odom) ────────────────────────────────────────
+    # ── 2. EKF (odom twist + IMU + GPS-odom) ───────────────────────────────
     ekf = Node(
         package='robot_localization',
         executable='ekf_node',
@@ -47,7 +44,7 @@ def generate_launch_description():
         parameters=[ekf_yaml],
     )
 
-    # ── 3. GPS → local odom  (needs /gps  +  /odometry/filtered  +  /imu) ────
+    # ── 3. GPS → local odom  (needs /gps  +  /odometry/filtered  +  /imu) ──
     navsat = Node(
         package='robot_localization',
         executable='navsat_transform_node',
@@ -55,10 +52,10 @@ def generate_launch_description():
         output='screen',
         parameters=[navsat_yaml],
         remappings=[
-            ('gps/fix',            '/gps'),                 # from nmea_navsat
-            ('imu',                '/imu'),                 # from Teensy
-            ('odometry/filtered',  '/odometry/filtered'),   # from EKF
-            ('odometry/gps',       '/odometry/gps'),        # back to EKF odom1
+            ('gps/fix',            '/gps'),
+            ('imu',                '/imu'),                 # Madgwick-filtered RealSense IMU
+            ('odometry/filtered',  '/odometry/filtered'),
+            ('odometry/gps',       '/odometry/gps'),
         ]
     )
 
@@ -87,7 +84,7 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
-        wheel_odom,
+        cmd_vel_odom,
         ekf,
         navsat,
         slam,
