@@ -31,22 +31,22 @@ void setup() {
 
 // --------------------------------------------------
 void loop() {
-
-  while (Serial.available()) {
-
-    char c = Serial.read();
-
-    if (c == '\n' || c == '\r') {
-
-      if (input.length() > 0) {
-        processCommand(input);
-        input = "";
-      }
-
-    } else {
-      input += c;
-    }
-  }
+//
+//  while (Serial.available()) {
+//
+//    char c = Serial.read();
+//
+//    if (c == '\n' || c == '\r') {
+//
+//      if (input.length() > 0) {
+//        processCommand(input);
+//        input = "";
+//      }
+//
+//    } else {
+//      input += c;
+//    }
+//  }
 }
 
 // --------------------------------------------------
