@@ -7,3 +7,4 @@ venv/
 build/
 install/
 __pycache__/
+*.py[cod]
