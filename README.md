@@ -234,6 +234,33 @@ ros2 topic pub --once /final_goal geometry_msgs/msg/PoseStamped \
 
 ---
 
+## Sending a Real GPS Goal
+
+On real hardware with GPS-anchored localization, you can send goals using
+latitude/longitude coordinates. The `send_gps_goal` tool uses
+`navsat_transform_node`'s `/fromLL` service to convert GPS coordinates into
+local map-frame positions.
+
+```bash
+# Basic — planner chooses approach angle
+ros2 run mission send_gps_goal --lat 28.75321 --lon 77.11765
+
+# With specific heading (degrees, 0=North clockwise)
+ros2 run mission send_gps_goal --lat 28.75321 --lon 77.11765 --heading 90
+```
+
+The tool will:
+1. Convert the GPS coordinate to map-frame x,y
+2. Show the converted coordinates for visual sanity-checking
+3. Wait 2 seconds (Ctrl+C to abort if wrong)
+4. Publish to `/final_goal`
+
+> **Note:** Consumer GPS is 2-5m accurate. Final approach precision relies
+> on lane-following / `lane_bev_carrot_node` local navigation (camera +
+> costmap), not GPS.
+
+---
+
 ## Manual Turret Control
 
 To manually move the turret, publish angles directly:

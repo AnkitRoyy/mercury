@@ -14,14 +14,15 @@ ekf_filter_node:
     map_frame:       map
     odom_frame:      odom
     base_link_frame: base_link
-    world_frame:     odom        # EKF outputs odom → base_link
+    world_frame:     map        # GPS-anchored: EKF owns map→odom TF
+                                # (fuses absolute GPS position via odom1)
 
     # ── Source 0: Wheel odometry ─────────────────────────────────────────────
     # x, y, z | roll, pitch, yaw | vx, vy, vz | vroll, vpitch, vyaw | ax, ay, az
     odom0: /odom
-    odom0_config: [false, false, false,
-                   false, false, false,
-                   true,  false, false,
+    odom0_config: [true,  true,  false,
+                   false, false, true,
+                   true,  true,  false,
                    false, false, true,
                    false, false, false]
     odom0_queue_size:     10
@@ -32,16 +33,16 @@ ekf_filter_node:
     # orientation + angular velocity  (no linear accel — too noisy for outdoor)
     imu0: /imu
     imu0_config: [false, false, false,
-                  false, false, true,
+                  true,  true,  true,
                   false, false, false,
-                  false, false, true,
+                  true,  true,  true,
                   false, false, false]
     imu0_queue_size:   10
     imu0_differential: false
     imu0_relative:     false
     imu0_remove_gravitational_acceleration: true
 
-    # ── Source 2: GPS → converted to odom by navsat_transform ─────────────────
+    # ── Source 2: GPS → converted to local odom by navsat_transform_node ─────
     odom1: /odometry/gps
     odom1_config: [true,  true,  false,
                    false, false, false,

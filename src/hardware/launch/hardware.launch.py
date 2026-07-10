@@ -7,7 +7,7 @@ from launch_ros.actions import Node
 # ─── Serial Port Defaults ────────────────────────────────────────────────────
 
 LIDAR_PORT  = '/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_47bd82635cda7e44a9f4fb6e59533130-if00-port0'
-TEENSY_PORT = '/dev/serial/by-id/usb-Teensyduino_USB_Serial_19085340-if00'
+TEENSY_PORT = '/dev/serial/by-id/usb-Teensyduino_USB_Serial_19904990-if00'
 GPS_PORT    = '/dev/serial/by-id/usb-u-blox_AG_-_www.u-blox.com_u-blox_GNSS_receiver-if00'
 
 # To test higher res later:  pixel_format='mjpeg2rgb', 1280x720
@@ -112,8 +112,8 @@ def generate_launch_description():
         name='teensy',
         output='screen',
         parameters=[{
-            'wheel_radius':     0.075,
-            'wheel_separation': 0.44,
+            'wheel_radius':     0.24,
+            'wheel_separation': 0.84,
             'max_wheel_rpm':    240.0,
             'serial_port':      LaunchConfiguration('teensy_serial_port'),
             'serial_baud':      115200,
