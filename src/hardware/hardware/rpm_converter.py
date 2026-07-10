@@ -49,8 +49,8 @@ class TeensyRpmNode(Node):
         super().__init__('teensy')
 
         # ── Parameters ────────────────────────────────────────────────────────
-        self.declare_parameter('wheel_radius', 0.075)
-        self.declare_parameter('wheel_separation', 0.44)
+        self.declare_parameter('wheel_radius', 0.24)
+        self.declare_parameter('wheel_separation', 0.84)
         self.declare_parameter('max_wheel_rpm', 240.0)
         self.declare_parameter('serial_port', '/dev/ttyACM0')
         self.declare_parameter('serial_baud', 115200)

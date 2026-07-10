@@ -8,3 +8,4 @@ build/
 install/
 __pycache__/
 *.py[cod]
+ghj.txt
