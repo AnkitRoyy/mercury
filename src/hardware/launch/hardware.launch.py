@@ -22,15 +22,15 @@ GPS_PORT    = '/dev/serial/by-id/usb-u-blox_AG_-_www.u-blox.com_u-blox_GNSS_rece
 #   backlight_compensation   : 0–7               (default=0)
 #   power_line_frequency     : 0=off,1=50Hz,2=60Hz (default=1)
 
-CAM_DEVICE  = '/dev/video2'
+CAM_DEVICE  = '/dev/video3'
 CAM_WIDTH   = 640
 CAM_HEIGHT  = 480
 CAM_FPS     = 30
 CAM_FORMAT  = 'yuyv2rgb'    # stable on Jazzy; switch to mjpeg2rgb once bug is resolved
 
 PRE_CTRLS = [
-    'auto_exposure=1',              # 1=manual (unlocks exposure_time_absolute)
-    'exposure_time_absolute=15',   # 100µs units; 150=15ms — tuned for indoor/outdoor
+    'auto_exposure=0',              # 1=manual (unlocks exposure_time_absolute)
+    'exposure_time_absolute=4',   # 100µs units; 150=15ms — tuned for indoor/outdoor
     'focus_automatic_continuous=0', # disable autofocus hunt
 ]
 
