@@ -108,7 +108,7 @@ def generate_launch_description():
 
     teensy = Node(
         package='hardware',
-        executable='rpm_converter.py',
+        executable='teensy_driver.py',
         name='teensy',
         output='screen',
         parameters=[{

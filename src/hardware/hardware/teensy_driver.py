@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
-rpm_converter.py
+teensy_driver.py
 ================
 Converts cmd_vel (m/s, rad/s) to wheel RPM and sends to Teensy via serial (micro USB).
+Also reads IMU (orientation, angular velocity, linear acceleration) and wheel encoder
+data streamed back from the Teensy over the same serial link.
 
 Subscribes:
     /cmd_vel                (geometry_msgs/Twist) linear & angular velocity from Nav2/controllers
@@ -10,6 +12,8 @@ Subscribes:
 Publishes:
     /wheel_speeds           (Float32MultiArray) [left_rpm, right_rpm] for logging/monitoring
     /teensy_status          (String) serial communication status (optional)
+    /imu                    (sensor_msgs/Imu) orientation, angular velocity, linear acceleration
+    /wheel_encoders         (Float32MultiArray) [rpmFR, rpmFL, rpmRR, rpmRL]
 
 Parameters:
     wheel_radius            float   default: 0.075  (meters)
@@ -24,13 +28,16 @@ Conversion:
     1. Calculate wheel velocities (m/s):
        v_left  = linear_vel - (angular_vel × wheel_separation/2)
        v_right = linear_vel + (angular_vel × wheel_separation/2)
-
     2. Convert to RPM:
        circumference = 2π × wheel_radius
        rpm = (velocity_m_s / circumference) × 60
-
     3. Send to Teensy:
        Format: "L{rpm_left},R{rpm_right}\n"  (e.g., "L100.5,R-50.2\n")
+
+IMU JSON format expected from Teensy (one line per message):
+    {"t":"imu","qx":..,"qy":..,"qz":..,"qw":..,
+     "gx":..,"gy":..,"gz":..,      # angular velocity, rad/s
+     "ax":..,"ay":..,"az":..}      # linear acceleration, m/s^2
 """
 
 import rclpy
@@ -42,13 +49,11 @@ import serial
 import threading
 from sensor_msgs.msg import Imu
 
-
 class TeensyRpmNode(Node):
-
     def __init__(self):
         super().__init__('teensy')
 
-        # ── Parameters ────────────────────────────────────────────────────────
+        # Parameters
         self.declare_parameter('wheel_radius', 0.24)
         self.declare_parameter('wheel_separation', 0.84)
         self.declare_parameter('max_wheel_rpm', 240.0)
@@ -72,26 +77,28 @@ class TeensyRpmNode(Node):
         self.serial_conn = None
         self.serial_lock = threading.Lock()
 
+        # Covariance for IMU fields
+        self._orientation_cov = [0.01, 0.0, 0.0, 0.0, 0.01, 0.0, 0.0, 0.0, 0.01]
+        self._ang_vel_cov = [0.02, 0.0, 0.0, 0.0, 0.02, 0.0, 0.0, 0.0, 0.02]
+        self._lin_accel_cov = [0.04, 0.0, 0.0, 0.0, 0.04, 0.0, 0.0, 0.0, 0.04]
 
-        self._imu_pub  = self.create_publisher(Imu,   '/imu',           10)
-        self._enc_pub  = self.create_publisher(Float32MultiArray, '/wheel_encoders', 10)
+        self._imu_pub = self.create_publisher(Imu, '/imu', 10)
+        self._enc_pub = self.create_publisher(Float32MultiArray, '/wheel_encoders', 10)
 
         self.init_serial()
-
         self._read_thread = threading.Thread(target=self._read_loop, daemon=True)
         self._read_thread.start()
 
-
-        # ── Publishers ────────────────────────────────────────────────────────
+        # Publishers
         self.pub_wheel_speeds = self.create_publisher(Float32MultiArray, '/wheel_speeds', 10)
         if self.enable_debug:
             self.pub_status = self.create_publisher(String, '/teensy_status', 10)
 
-        # ── Subscribers ───────────────────────────────────────────────────────
+        # Subscribers
         self.sub_cmd_vel = self.create_subscription(Twist, '/cmd_vel', self.cmd_vel_cb, 10)
 
         self.get_logger().info(
-            f'Teensy RPM Converter ready\n'
+            f'Teensy Driver ready\n'
             f'  wheel_radius={self.wheel_radius}m\n'
             f'  wheel_separation={self.wheel_separation}m\n'
             f'  circumference={self.circumference:.4f}m\n'
@@ -99,7 +106,8 @@ class TeensyRpmNode(Node):
             f'  serial_port={self.serial_port}\n'
             f'  serial_baud={self.serial_baud}\n'
             f'  serial_enabled={self.enable_serial}\n'
-            f'  Subscribed to /cmd_vel'
+            f'  Subscribed to /cmd_vel\n'
+            f'  Publishing /imu (orientation + angular_velocity + linear_acceleration)'
         )
 
     def init_serial(self):
@@ -119,111 +127,96 @@ class TeensyRpmNode(Node):
             self.get_logger().error(f'Failed to open serial port {self.serial_port}: {e}')
             self.serial_conn = None
 
-        
-
     def _read_loop(self):
         import json, time
         while rclpy.ok():
             try:
                 if self.serial_conn is None or not self.serial_conn.is_open:
                     time.sleep(1.0)
-                    # Start read thread
                     self.init_serial()
                     continue
                 line = self.serial_conn.readline().decode('utf-8', errors='ignore').strip()
-                if not line or not line.startswith('{'): continue
+                if not line or not line.startswith('{'):
+                    continue
                 data = json.loads(line)
                 if data.get('t') == 'imu':
                     msg = Imu()
-                    msg.header.stamp    = self.get_clock().now().to_msg()
+                    msg.header.stamp = self.get_clock().now().to_msg()
                     msg.header.frame_id = 'imu_link'
-                    msg.orientation.x   = float(data['qx'])
-                    msg.orientation.y   = float(data['qy'])
-                    msg.orientation.z   = float(data['qz'])
-                    msg.orientation.w   = float(data['qw'])
+
+                    msg.orientation.x = float(data['qx'])
+                    msg.orientation.y = float(data['qy'])
+                    msg.orientation.z = float(data['qz'])
+                    msg.orientation.w = float(data['qw'])
+                    msg.orientation_covariance = self._orientation_cov
+
+                    msg.angular_velocity.x = float(data.get('gx', 0.0))
+                    msg.angular_velocity.y = float(data.get('gy', 0.0))
+                    msg.angular_velocity.z = float(data.get('gz', 0.0))
+                    msg.angular_velocity_covariance = self._ang_vel_cov
+
+                    msg.linear_acceleration.x = float(data.get('ax', 0.0))
+                    msg.linear_acceleration.y = float(data.get('ay', 0.0))
+                    msg.linear_acceleration.z = float(data.get('az', 0.0))
+                    msg.linear_acceleration_covariance = self._lin_accel_cov
+
                     self._imu_pub.publish(msg)
                 elif data.get('t') == 'enc':
                     msg = Float32MultiArray()
                     msg.data = [float(data['rpmFR']), float(data['rpmFL']),
                                 float(data['rpmRR']), float(data['rpmRL'])]
                     self._enc_pub.publish(msg)
-            except (json.JSONDecodeError, KeyError): pass
+            except (json.JSONDecodeError, KeyError):
+                pass
             except Exception as e:
                 self.get_logger().warn(f'Read error: {e}')
                 self.serial_conn = None
                 time.sleep(1.0)
 
     def send_to_teensy(self, rpm_left: float, rpm_right: float):
-        """
-        Send RPM values to Teensy via serial.
-        
-        Format: "L{rpm_left},R{rpm_right}\n"
-        Example: "L100.5,R-50.2\n"
-        
-        Args:
-            rpm_left: Left wheel RPM
-            rpm_right: Right wheel RPM
-        """
+        """Send RPM values to Teensy via serial."""
         if not self.enable_serial:
             return
-            
+
         if self.serial_conn is None:
             self.get_logger().debug('Serial connection is None, skipping write')
             return
 
         try:
             with self.serial_lock:
-                # Format command: "L{rpm_left},R{rpm_right}\n"
                 cmd = f"L{rpm_left:.1f},R{rpm_right:.1f}\n"
                 bytes_written = self.serial_conn.write(cmd.encode())
                 self.get_logger().info(f'Wrote {bytes_written} bytes to serial: {cmd.strip()}')
-                
+
                 if self.enable_debug:
                     status = String()
                     status.data = f'Sent to Teensy: {cmd.strip()}'
                     self.pub_status.publish(status)
-                    
         except Exception as e:
             self.get_logger().error(f'Serial write error ({type(e).__name__}): {e}')
             self.serial_conn = None
 
     def cmd_vel_cb(self, msg: Twist):
-        """
-        Convert cmd_vel (m/s, rad/s) to wheel RPM and send to Teensy.
-        
-        Args:
-            msg: Twist message containing linear and angular velocities
-        """
-        linear_vel = msg.linear.x      # m/s (forward/backward)
-        angular_vel = msg.angular.z    # rad/s (rotation around z-axis)
+        """Convert cmd_vel to wheel RPM and send to Teensy."""
+        linear_vel = msg.linear.x
+        angular_vel = msg.angular.z
 
         self.get_logger().info(f'Received cmd_vel: linear={linear_vel:.3f} m/s, angular={angular_vel:.3f} rad/s')
 
-        # ── Calculate wheel velocities (m/s) ──────────────────────────────────
-        # For differential drive:
-        # v_left  = v_center - (ω × R/2)
-        # v_right = v_center + (ω × R/2)
-        # where R is wheel separation and ω is angular velocity
         half_separation = self.wheel_separation / 2.0
-        
         v_left = linear_vel - (angular_vel * half_separation)
         v_right = linear_vel + (angular_vel * half_separation)
 
-        # ── Convert to RPM ────────────────────────────────────────────────────
-        # rpm = (velocity_m_s / circumference) × 60
         rpm_left = (v_left / self.circumference) * 60.0
         rpm_right = (v_right / self.circumference) * 60.0
 
-        # ── Clamp to max RPM for safety ───────────────────────────────────────
         rpm_left = max(-self.max_wheel_rpm, min(self.max_wheel_rpm, rpm_left))
         rpm_right = max(-self.max_wheel_rpm, min(self.max_wheel_rpm, rpm_right))
 
-        # ── Publish wheel speeds for monitoring ────────────────────────────────
         wheel_speeds = Float32MultiArray()
         wheel_speeds.data = [rpm_left, rpm_right]
         self.pub_wheel_speeds.publish(wheel_speeds)
 
-        # ── Send to Teensy via serial ──────────────────────────────────────────
         self.send_to_teensy(rpm_left, rpm_right)
 
     def destroy_node(self):
@@ -236,7 +229,6 @@ class TeensyRpmNode(Node):
                 pass
         super().destroy_node()
 
-
 def main():
     rclpy.init()
     node = TeensyRpmNode()
@@ -245,7 +237,6 @@ def main():
     finally:
         node.destroy_node()
         rclpy.shutdown()
-
 
 if __name__ == '__main__':
     main()
