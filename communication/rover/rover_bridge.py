@@ -16,14 +16,16 @@ Mental model:
   │   ├── alerts_log.json    → ALERT → TCP :6000 (with ACK)
   │   └── navigation_log.json→ MODE/ESTOP/FACE_TASK → TCP :6000 (with ACK)
   ├── Heartbeat thread       → TCP :6000 at 10 Hz
-  └── Camera threads (one per USB device, no ROS)
-      ├── Main camera   → MAIN_CAM   (see CONFIG below) → UDP :5600
-      └── Turret camera → TURRET_CAM (see CONFIG below) → UDP :5601
+  ├── Camera threads (one per USB device, no ROS)
+  │   ├── Main camera   → MAIN_CAM   (see CONFIG below) → UDP :5600
+  │   └── Turret camera → TURRET_CAM (see CONFIG below) → UDP :5601
+  └── Command receiver       → UDP :5700 ←Base   SERVO commands
+      └── Serial link to turret Arduino (PAN/TILT)
 
 All settings live in the CONFIG block below — edit and run, no CLI flags.
 
 Usage:
-    pip install msgpack opencv-python numpy
+    pip install msgpack opencv-python numpy pyserial
     python3 ugv_gcs_bridge.py
 """
 import glob
@@ -37,6 +39,7 @@ import time
 import logging
 
 import msgpack
+import serial
 
 logging.basicConfig(
     level=logging.INFO,
@@ -67,6 +70,11 @@ CAM_FPS      = 20
 CAM_FOURCC   = "MJPG"
 CAM_QUALITY  = 60   # JPEG quality 0-100
 
+# Turret servo Arduino — stable by-id path (survives reboots/port swaps,
+# unlike /dev/ttyUSB0 which can shift if another serial device is plugged in).
+SERVO_SERIAL_PORT = "/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0"
+SERVO_SERIAL_BAUD = 115200
+
 # ═══════════════════════════════════════════════════════════════════════════
 
 # ─── Ports (must match gcs_receiver.py) ──────────────────────────────────────
@@ -80,6 +88,7 @@ UDP_VIDEO_PORT   = 5600
 UDP_TURRET_VIDEO_PORT = 5601
 TCP_CMD_PORT     = 6000
 TCP_FILE_PORT    = 7000
+UDP_CMD_IN_PORT  = 5700   # ←Base  SERVO / other commands (must match base's UDP_ROVER_CMD_PORT)
 
 CMD_RETRANSMIT_INTERVAL = 0.5
 CMD_MAX_RETRIES         = 10
@@ -338,6 +347,77 @@ class UsbCameraStreamer:
             self._cap.release()
 
 
+# ─── Serial link to turret Arduino ────────────────────────────────────────────
+class SerialTurret:
+    """
+    Owns the serial connection to the turret Arduino and translates
+    SERVO commands into the Arduino sketch's "PAN:x,TILT:y" wire format.
+    Fails soft — if the port isn't there at startup, commands are just
+    logged and dropped instead of crashing the whole bridge.
+    """
+
+    def __init__(self, port: str, baud: int):
+        self._ser = None
+        try:
+            self._ser = serial.Serial(port, baud, timeout=0.2)
+            time.sleep(2)  # Arduino resets when the serial port opens
+            log.info("Turret serial connected on %s @ %d", port, baud)
+        except Exception as e:
+            log.warning("Turret serial unavailable (%s): %s — SERVO commands will be dropped", port, e)
+
+    def send(self, pan: float, tilt: float):
+        if not self._ser:
+            log.debug("Turret serial not connected — dropping PAN=%.1f TILT=%.1f", pan, tilt)
+            return
+        try:
+            self._ser.write(f"PAN:{pan:.1f},TILT:{tilt:.1f}\n".encode())
+        except Exception as e:
+            log.warning("Turret serial write failed: %s", e)
+
+    def close(self):
+        if self._ser:
+            self._ser.close()
+
+
+# ─── UDP command receiver (Base → Rover) ──────────────────────────────────────
+class CmdReceiver:
+    """
+    Listens for JSON commands forwarded from the base station's
+    _forward_to_rover() (base_bridge.py). Currently handles SERVO;
+    extend the dispatch below for future command types.
+    """
+
+    def __init__(self, port: int, turret: SerialTurret):
+        self._turret  = turret
+        self._sock    = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._sock.bind(("0.0.0.0", port))
+        self._sock.settimeout(1.0)
+        self._running = True
+        threading.Thread(target=self._run, daemon=True).start()
+        log.info("Command receiver listening on :%d", port)
+
+    def _run(self):
+        while self._running:
+            try:
+                data, addr = self._sock.recvfrom(4096)
+                cmd = json.loads(data.decode())
+                ctype = cmd.get("type", "")
+                if ctype == "SERVO":
+                    pan  = float(cmd.get("pan", 0))
+                    tilt = float(cmd.get("tilt", 0))
+                    self._turret.send(pan, tilt)
+                    log.debug("SERVO ← %s  PAN=%.1f TILT=%.1f", addr[0], pan, tilt)
+            except socket.timeout:
+                continue
+            except Exception as e:
+                log.warning("Cmd receiver error: %s", e)
+
+    def stop(self):
+        self._running = False
+        self._sock.close()
+
+
 # ─── File tailer ─────────────────────────────────────────────────────────────
 class FileTailer:
     """
@@ -548,6 +628,10 @@ def main():
                 if not turret_streamer.start():
                     turret_streamer = None
 
+    # ── Turret servo — serial link + command receiver ────────────────────────
+    turret = SerialTurret(SERVO_SERIAL_PORT, SERVO_SERIAL_BAUD)
+    cmd_rx = CmdReceiver(UDP_CMD_IN_PORT, turret)
+
     log.info("Bridge running. Press Ctrl+C to stop.")
     try:
         while True:
@@ -557,6 +641,8 @@ def main():
         stop.set()
         udp.close()
         tcp.close()
+        cmd_rx.stop()
+        turret.close()
         if main_streamer:
             main_streamer.stop()
         if turret_streamer:
