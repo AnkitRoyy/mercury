@@ -26,7 +26,7 @@ Usage:
     pip install msgpack opencv-python numpy
     python3 ugv_gcs_bridge.py
 """
-
+import glob
 import json
 import os
 import socket
@@ -57,8 +57,9 @@ ENABLE_TURRET_CAM  = True   # set False to stream only the main camera
 # Stable by-id paths — survive reboots and USB port swaps, unlike /dev/videoN.
 # Always use the "-video-index0" symlink (index1 is a metadata-only node on
 # most UVC webcams and won't produce readable frames via OpenCV).
-MAIN_CAM   = "/dev/v4l/by-id/usb-EMEET_EMEET_SmartCam_C950_4K_A260131000702152-video-index0"
+# MAIN_CAM   = "/dev/v4l/by-id/usb-EMEET_EMEET_SmartCam_C950_4K_A260131000702152-video-index0"
 TURRET_CAM = "/dev/v4l/by-id/usb-Image+_Angetube Live Camera_HU1234567898-video-index0"
+MAIN_CAM = glob.glob("/dev/v4l/by-id/*Angetube*video-index0")[0]
 
 CAM_WIDTH    = 640
 CAM_HEIGHT   = 480
