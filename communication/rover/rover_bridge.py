@@ -44,12 +44,19 @@ logging.basicConfig(
 )
 log = logging.getLogger("ugv_bridge")
 
+# ═══════════════════════════════════════════════════════════════════════════
+# CONFIG — edit these instead of passing CLI flags
+# ═══════════════════════════════════════════════════════════════════════════
+
 GCS_IP  = "192.168.88.2"                       # GCS laptop IP
 LOG_DIR = os.path.expanduser("~/robot_logs")   # telemetry log directory
 
 ENABLE_VIDEO       = True   # set False to disable both camera streams
 ENABLE_TURRET_CAM  = True   # set False to stream only the main camera
 
+# Stable by-id paths — survive reboots and USB port swaps, unlike /dev/videoN.
+# Always use the "-video-index0" symlink (index1 is a metadata-only node on
+# most UVC webcams and won't produce readable frames via OpenCV).
 MAIN_CAM   = "/dev/v4l/by-id/usb-EMEET_EMEET_SmartCam_C950_4K_A260131000702152-video-index0"
 TURRET_CAM = "/dev/v4l/by-id/usb-Image+_Angetube Live Camera_HU1234567898-video-index0"
 
@@ -266,7 +273,17 @@ class UsbCameraStreamer:
         import cv2
         self._apply_v4l2_controls()
 
-        self._cap = cv2.VideoCapture(self._device, cv2.CAP_V4L2)
+        # OpenCV's V4L2 backend can fail to open a device "by name" when the
+        # path contains characters like spaces (common in by-id symlinks
+        # built from a camera's USB product-name string, e.g. cameras whose
+        # descriptor is "Angetube Live Camera"). Resolving the symlink to
+        # its real /dev/videoN target sidesteps that backend limitation
+        # while still letting us select the camera by its stable by-id path.
+        resolved = os.path.realpath(self._device)
+        if resolved != self._device:
+            log.info("[%s] Resolved %s → %s", self._label, self._device, resolved)
+
+        self._cap = cv2.VideoCapture(resolved, cv2.CAP_V4L2)
         if self._fourcc:
             self._cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*self._fourcc))
         self._cap.set(cv2.CAP_PROP_FRAME_WIDTH,  self._width)
@@ -274,9 +291,9 @@ class UsbCameraStreamer:
         self._cap.set(cv2.CAP_PROP_FPS,          self._fps)
 
         if not self._cap.isOpened():
-            log.error("[%s] Failed to open USB camera %s — check the device path "
-                       "(try `v4l2-ctl --list-devices` or `ls /dev/video*`)",
-                       self._label, self._device)
+            log.error("[%s] Failed to open USB camera %s (resolved: %s) — check the "
+                       "device path (try `v4l2-ctl --list-devices` or `ls /dev/video*`)",
+                       self._label, self._device, resolved)
             return False
 
         self._running = True
