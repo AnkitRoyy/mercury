@@ -23,7 +23,7 @@ REALSENSE_SERIAL = ''
 #   backlight_compensation   : 0–7               (default=0)
 #   power_line_frequency     : 0=off,1=50Hz,2=60Hz (default=1)
 
-CAM_DEVICE  = '/dev/video8'
+CAM_DEVICE  = '/dev/video2'
 CAM_WIDTH   = 640
 CAM_HEIGHT  = 480
 CAM_FPS     = 30
@@ -149,6 +149,13 @@ def generate_launch_description():
         }],
     )
 
+    odom = Node(
+        package='hardware',
+        executable='wheel_odom_node.py',
+        name='teensy',
+        output='screen',
+    )
+
     gps = Node(
         package='nmea_navsat_driver',
         executable='nmea_serial_driver',
@@ -166,11 +173,12 @@ def generate_launch_description():
     return LaunchDescription([
         video_device_arg,
         pre_cam_setup,
-        fake_encoders,      
+        # fake_encoders,      
         usb_cam,            
         post_cam_ctrls,    
         lidar_serial_port_arg, lidar,
-        # teensy_serial_port_arg, teensy,
+        teensy_serial_port_arg, teensy,
+        odom,
         gps_serial_port_arg, gps,
         realsense
     ])

@@ -24,6 +24,7 @@ install(PROGRAMS
   hardware/teensy_driver.py
   hardware/wheel_odom_node.py
   hardware/fake_encoders.py
+  hardware/wheel_odom_node.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

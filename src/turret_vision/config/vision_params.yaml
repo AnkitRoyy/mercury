@@ -43,8 +43,8 @@ turret:
 
 trigger:
   ros__parameters:
-    trigger_waypoint_name: "WP-2"
-    trigger_waypoint_index: 2
+    trigger_waypoint_name: "DISABLED"
+    trigger_waypoint_index: -1
     hard_timeout_sec: 55.0
     stop_vehicle_on_trigger: true
     cmd_vel_topic: "/cmd_vel"

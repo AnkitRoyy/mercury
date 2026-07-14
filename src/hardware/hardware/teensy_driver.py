@@ -3,8 +3,7 @@
 teensy_driver.py
 ================
 Converts cmd_vel (m/s, rad/s) to wheel RPM and sends to Teensy via serial (micro USB).
-Also reads IMU (orientation, angular velocity, linear acceleration) and wheel encoder
-data streamed back from the Teensy over the same serial link.
+Also reads wheel encoder data streamed back from the Teensy over the same serial link.
 
 Subscribes:
     /cmd_vel                (geometry_msgs/Twist) linear & angular velocity from Nav2/controllers
@@ -12,7 +11,6 @@ Subscribes:
 Publishes:
     /wheel_speeds           (Float32MultiArray) [left_rpm, right_rpm] for logging/monitoring
     /teensy_status          (String) serial communication status (optional)
-    /imu                    (sensor_msgs/Imu) orientation, angular velocity, linear acceleration
     /wheel_encoders         (Float32MultiArray) [rpmFR, rpmFL, rpmRR, rpmRL]
 
 Parameters:
@@ -34,10 +32,8 @@ Conversion:
     3. Send to Teensy:
        Format: "L{rpm_left},R{rpm_right}\n"  (e.g., "L100.5,R-50.2\n")
 
-IMU JSON format expected from Teensy (one line per message):
-    {"t":"imu","qx":..,"qy":..,"qz":..,"qw":..,
-     "gx":..,"gy":..,"gz":..,      # angular velocity, rad/s
-     "ax":..,"ay":..,"az":..}      # linear acceleration, m/s^2
+Encoder JSON format expected from Teensy (one line per message):
+    {"t":"enc","rpmFR":..,"rpmFL":..,"rpmRR":..,"rpmRL":..}
 """
 
 import rclpy
@@ -47,7 +43,6 @@ from std_msgs.msg import Float32MultiArray, String
 import math
 import serial
 import threading
-from sensor_msgs.msg import Imu
 
 class TeensyRpmNode(Node):
     def __init__(self):
@@ -77,12 +72,6 @@ class TeensyRpmNode(Node):
         self.serial_conn = None
         self.serial_lock = threading.Lock()
 
-        # Covariance for IMU fields
-        self._orientation_cov = [0.01, 0.0, 0.0, 0.0, 0.01, 0.0, 0.0, 0.0, 0.01]
-        self._ang_vel_cov = [0.02, 0.0, 0.0, 0.0, 0.02, 0.0, 0.0, 0.0, 0.02]
-        self._lin_accel_cov = [0.04, 0.0, 0.0, 0.0, 0.04, 0.0, 0.0, 0.0, 0.04]
-
-        self._imu_pub = self.create_publisher(Imu, '/imu', 10)
         self._enc_pub = self.create_publisher(Float32MultiArray, '/wheel_encoders', 10)
 
         self.init_serial()
@@ -107,7 +96,7 @@ class TeensyRpmNode(Node):
             f'  serial_baud={self.serial_baud}\n'
             f'  serial_enabled={self.enable_serial}\n'
             f'  Subscribed to /cmd_vel\n'
-            f'  Publishing /imu (orientation + angular_velocity + linear_acceleration)'
+            f'  Publishing /wheel_encoders'
         )
 
     def init_serial(self):
@@ -139,29 +128,7 @@ class TeensyRpmNode(Node):
                 if not line or not line.startswith('{'):
                     continue
                 data = json.loads(line)
-                if data.get('t') == 'imu':
-                    msg = Imu()
-                    msg.header.stamp = self.get_clock().now().to_msg()
-                    msg.header.frame_id = 'imu_link'
-
-                    msg.orientation.x = float(data['qx'])
-                    msg.orientation.y = float(data['qy'])
-                    msg.orientation.z = float(data['qz'])
-                    msg.orientation.w = float(data['qw'])
-                    msg.orientation_covariance = self._orientation_cov
-
-                    msg.angular_velocity.x = float(data.get('gx', 0.0))
-                    msg.angular_velocity.y = float(data.get('gy', 0.0))
-                    msg.angular_velocity.z = float(data.get('gz', 0.0))
-                    msg.angular_velocity_covariance = self._ang_vel_cov
-
-                    msg.linear_acceleration.x = float(data.get('ax', 0.0))
-                    msg.linear_acceleration.y = float(data.get('ay', 0.0))
-                    msg.linear_acceleration.z = float(data.get('az', 0.0))
-                    msg.linear_acceleration_covariance = self._lin_accel_cov
-
-                    self._imu_pub.publish(msg)
-                elif data.get('t') == 'enc':
+                if data.get('t') == 'enc':
                     msg = Float32MultiArray()
                     msg.data = [float(data['rpmFR']), float(data['rpmFL']),
                                 float(data['rpmRR']), float(data['rpmRL'])]
