@@ -23,6 +23,7 @@ ament_python_install_package(${PROJECT_NAME})
 install(PROGRAMS
   hardware/teensy_driver.py
   hardware/wheel_odom_node.py
+  hardware/fake_encoders.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
