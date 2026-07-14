@@ -18,7 +18,7 @@ fi
 
 echo
 echo "Collecting GPS samples for 100 seconds..."
-timeout 10 ros2 topic echo /gps > "$GPS_LOG" || true
+timeout 60 ros2 topic echo /gps > "$GPS_LOG" || true
 
 echo "Filtering FIX samples..."
 

@@ -13,7 +13,7 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Float32MultiArray
 
-FAKE_RPM = 20.0   # same value on all 4 wheels = straight line, no turning
+FAKE_RPM = 00.0   # same value on all 4 wheels = straight line, no turning
 RATE_HZ  = 20.0   # match your real encoder publish rate if you know it
 
 

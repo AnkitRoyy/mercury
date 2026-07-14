@@ -23,7 +23,7 @@ REALSENSE_SERIAL = ''
 #   backlight_compensation   : 0–7               (default=0)
 #   power_line_frequency     : 0=off,1=50Hz,2=60Hz (default=1)
 
-CAM_DEVICE  = '/dev/video2'
+CAM_DEVICE  = '/dev/video8'
 CAM_WIDTH   = 640
 CAM_HEIGHT  = 480
 CAM_FPS     = 30
