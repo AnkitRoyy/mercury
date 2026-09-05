@@ -1,32 +1,48 @@
 #!/usr/bin/env python3
 """
-Localization Diagnostics Node
-=============================
-Compares EKF output against Gazebo ground truth to verify GPS fusion is working.
+Localization Diagnostics Node — Real Hardware
+==============================================
+Monitors EKF fusion health on the real rover. There is no ground truth on
+hardware, so this does NOT compute an "error vs truth" number. Instead it
+shows:
+  - Raw GPS fix quality (status, covariance, satellite-derived confidence)
+  - navsat_transform output (/odometry/gps)
+  - EKF fused output (/odometry/filtered) — what Nav2 actually uses
+  - Wheel odom (/odom) as a drift-check reference — NOT ground truth,
+    just useful to see how far the EKF has pulled away from raw odom
+    (e.g. because GPS correction kicked in, or because odom drifted)
 
 Subscribes:
-  /odometry/filtered   — EKF fused output (what Nav2 uses)
-  /odometry/gps        — navsat_transform output (GPS → local odom)
-  /gps_fixed           — raw GPS with covariance
-  /diff_drive_controller/odom     — wheel odometry (ground truth in sim)
+  /gps                  — raw GPS fix (sensor_msgs/NavSatFix), from nmea_serial_driver
+  /odometry/gps         — navsat_transform_node output
+  /odometry/filtered    — EKF fused output
+  /odom                 — wheel odometry
 
-Prints a live dashboard every 2 seconds showing:
-  - GPS lat/lon and distance from datum
-  - navsat /odometry/gps position
-  - EKF /odometry/filtered position
-  - Gazebo ground truth position
-  - ERROR between EKF and ground truth (this is what matters!)
+Datum defaults to the last computed navsat_transform_node datum
+(update DATUM_LAT/DATUM_LON below to match your current launch site,
+or leave auto-datum mode on to grab it from the first GPS fix instead).
 """
 
 import math
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import NavSatFix
 
-# Datum from mercury.sdf spherical_coordinates
-DATUM_LAT = 30.0444
-DATUM_LON = 31.2357
+# Set this to match your actual launch site datum (e.g. from navsat_transform_node
+# startup log: "Datum (latitude, longitude, altitude) is (...)").
+# Leave as None to auto-capture from the first GPS fix received instead.
+DATUM_LAT = None
+DATUM_LON = None
+
+# GPS fix status meaning (sensor_msgs/NavSatStatus)
+FIX_STATUS = {
+    -1: 'NO FIX',
+    0: 'FIX (no augmentation)',
+    1: 'SBAS FIX',
+    2: 'GBAS FIX',
+}
 
 
 def haversine_m(lat1, lon1, lat2, lon2):
@@ -44,22 +60,40 @@ class LocalizationDiagnostics(Node):
     def __init__(self):
         super().__init__('localization_diagnostics')
 
+        self.datum_lat = DATUM_LAT
+        self.datum_lon = DATUM_LON
+
         self.gps_data = None
         self.odom_gps = None
         self.ekf_odom = None
-        self.gz_truth = None
+        self.wheel_odom = None
 
-        self.create_subscription(NavSatFix, '/gps_fixed', self._cb_gps, 10)
+        # GPS/serial drivers often publish best-effort; match QoS so we don't
+        # silently drop messages against a mismatched default.
+        sensor_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10,
+        )
+
+        self.create_subscription(NavSatFix, '/gps', self._cb_gps, sensor_qos)
         self.create_subscription(Odometry, '/odometry/gps', self._cb_odom_gps, 10)
         self.create_subscription(Odometry, '/odometry/filtered', self._cb_ekf, 10)
-        self.create_subscription(
-            Odometry, '/diff_drive_controller/odom', self._cb_gz, 10)
+        self.create_subscription(Odometry, '/odom', self._cb_wheel, 10)
 
         self.timer = self.create_timer(2.0, self._print_dashboard)
-        self.get_logger().info('localization diagnostics started. dashboard prints every 2s...')
+        self.get_logger().info(
+            'localization diagnostics (real hardware) started. dashboard prints every 2s...')
+        if self.datum_lat is None:
+            self.get_logger().info('DATUM not set — will auto-capture from first GPS fix.')
 
     def _cb_gps(self, msg):
         self.gps_data = msg
+        if self.datum_lat is None and msg.status.status >= 0:
+            self.datum_lat = msg.latitude
+            self.datum_lon = msg.longitude
+            self.get_logger().info(
+                f'Auto-captured datum: ({self.datum_lat:.7f}, {self.datum_lon:.7f})')
 
     def _cb_odom_gps(self, msg):
         self.odom_gps = msg
@@ -67,75 +101,74 @@ class LocalizationDiagnostics(Node):
     def _cb_ekf(self, msg):
         self.ekf_odom = msg
 
-    def _cb_gz(self, msg):
-        self.gz_truth = msg
+    def _cb_wheel(self, msg):
+        self.wheel_odom = msg
 
     def _print_dashboard(self):
         lines = []
         lines.append('\n' + '=' * 65)
-        lines.append('       localization diagonstics dashboard  ')
+        lines.append('     localization diagnostics dashboard (real hardware)')
         lines.append('=' * 65)
 
         # --- GPS Raw ---
         if self.gps_data:
             g = self.gps_data
-            dist = haversine_m(DATUM_LAT, DATUM_LON, g.latitude, g.longitude)
-            lines.append(f'\ngps raw (/gps_fixed)  frame: {g.header.frame_id}')
-            lines.append(f'   lat: {g.latitude:.7f}   lon: {g.longitude:.7f}')
-            lines.append(f'   distance from datum: {dist:.2f} m')
+            status_str = FIX_STATUS.get(g.status.status, f'UNKNOWN({g.status.status})')
+            lines.append(f'\nGPS raw (/gps)  frame: {g.header.frame_id}')
+            lines.append(f'   status: {status_str}')
+            lines.append(f'   lat: {g.latitude:.7f}   lon: {g.longitude:.7f}   alt: {g.altitude:.2f}')
+            if g.status.status < 0:
+                lines.append('   NO FIX — position below is stale/invalid, ignore it')
+            elif self.datum_lat is not None:
+                dist = haversine_m(self.datum_lat, self.datum_lon, g.latitude, g.longitude)
+                lines.append(f'   distance from datum: {dist:.2f} m')
             cov_diag = [g.position_covariance[0],
                         g.position_covariance[4],
                         g.position_covariance[8]]
-            lines.append(f'   covariance diag: {cov_diag}  type: {g.position_covariance_type}')
-            if dist > 500:
-                lines.append('    GPS > 500m from datum — noise too high or wrong datum!')
+            lines.append(f'   covariance diag (m^2): {cov_diag}  type: {g.position_covariance_type}')
+            if cov_diag[0] > 100 or cov_diag[4] > 100:
+                lines.append('   ⚠ covariance is very high — GPS fix is low quality, EKF should be discounting it')
         else:
-            lines.append('\n GPS Raw (/gps_fixed):   NO DATA')
+            lines.append('\nGPS Raw (/gps):   NO DATA — check nmea_serial_driver is running and connected')
 
         # --- Navsat Odom ---
         if self.odom_gps:
             p = self.odom_gps.pose.pose.position
-            lines.append(f'\n  Navsat Odom (/odometry/gps)  frame: {self.odom_gps.header.frame_id}')
+            lines.append(f'\nNavsat Odom (/odometry/gps)  frame: {self.odom_gps.header.frame_id}')
             lines.append(f'   x: {p.x:8.3f}   y: {p.y:8.3f}   z: {p.z:8.3f}')
         else:
-            lines.append('\n  Navsat Odom (/odometry/gps):   NO DATA')
-            lines.append('   → navsat_transform_node is NOT producing output!')
+            lines.append('\nNavsat Odom (/odometry/gps):   NO DATA')
+            lines.append('   → navsat_transform_node is not producing output (no valid fix yet, or not receiving /imu for heading)')
 
         # --- EKF ---
         if self.ekf_odom:
             p = self.ekf_odom.pose.pose.position
-            lines.append(f'\n EKF Output (/odometry/filtered)  frame: {self.ekf_odom.header.frame_id}')
+            lines.append(f'\nEKF Output (/odometry/filtered)  frame: {self.ekf_odom.header.frame_id}')
             lines.append(f'   x: {p.x:8.3f}   y: {p.y:8.3f}   z: {p.z:8.3f}')
         else:
-            lines.append('\n EKF Output (/odometry/filtered):   NO DATA')
+            lines.append('\nEKF Output (/odometry/filtered):   NO DATA')
 
-        # --- Gazebo Ground Truth ---
-        if self.gz_truth:
-            p = self.gz_truth.pose.pose.position
-            lines.append(f'\n Wheel Odom Ground Truth (/diff_drive_controller/odom)')
+        # --- Wheel odom (reference only, NOT ground truth) ---
+        if self.wheel_odom:
+            p = self.wheel_odom.pose.pose.position
+            lines.append(f'\nWheel Odom (/odom) — reference only, NOT ground truth')
             lines.append(f'   x: {p.x:8.3f}   y: {p.y:8.3f}   z: {p.z:8.3f}')
         else:
-            lines.append('\n Wheel Odom Ground Truth:   NO DATA')
+            lines.append('\nWheel Odom (/odom):   NO DATA')
 
-        # --- Error comparison ---
-        if self.ekf_odom and self.gz_truth:
+        # --- Drift check: EKF vs wheel odom ---
+        if self.ekf_odom and self.wheel_odom:
             ep = self.ekf_odom.pose.pose.position
-            gp = self.gz_truth.pose.pose.position
-            err_x = ep.x - gp.x
-            err_y = ep.y - gp.y
-            err_2d = math.sqrt(err_x ** 2 + err_y ** 2)
+            wp = self.wheel_odom.pose.pose.position
+            diff_x = ep.x - wp.x
+            diff_y = ep.y - wp.y
+            diff_2d = math.sqrt(diff_x ** 2 + diff_y ** 2)
 
-            lines.append(f'\n EKF vs Ground Truth ERROR')
-            lines.append(f'   Δx: {err_x:+8.3f}   Δy: {err_y:+8.3f}')
-            lines.append(f'   2D error: {err_2d:.3f} m')
-            if err_2d < 1.0:
-                lines.append('   EXCELLENT — EKF within 1m of truth')
-            elif err_2d < 5.0:
-                lines.append('    GOOD — EKF within 5m of truth')
-            elif err_2d < 20.0:
-                lines.append('    FAIR — EKF drifting, GPS fusion may be weak')
-            else:
-                lines.append('    BAD — EKF is way off. GPS fusion likely broken!')
+            lines.append(f'\nEKF vs Wheel Odom DIVERGENCE (not an error metric — no ground truth on hardware)')
+            lines.append(f'   Δx: {diff_x:+8.3f}   Δy: {diff_y:+8.3f}')
+            lines.append(f'   2D divergence: {diff_2d:.3f} m')
+            lines.append('   Large divergence is expected once GPS correction kicks in;')
+            lines.append('   a divergence that grows unbounded with no GPS fix suggests wheel odom drift.')
 
         lines.append('\n' + '=' * 65)
         self.get_logger().info('\n'.join(lines))

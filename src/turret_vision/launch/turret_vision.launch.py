@@ -53,7 +53,7 @@ def generate_launch_description() -> LaunchDescription:
     
     device_arg = DeclareLaunchArgument(
         'camera_device',
-        default_value='/dev/video0',
+        default_value='/dev/video4',
         description='Camera device path'
     )
     
