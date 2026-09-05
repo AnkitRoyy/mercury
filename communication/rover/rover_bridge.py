@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """
 ugv_gcs_bridge.py  —  Rover side, NO ROS 2 dependency
-Reads from log files written by ugv_logger.py and forwards to GCS.
+Reads from log files written by ugv_logger.py and forwards telemetry to GCS.
+Camera feeds are captured DIRECTLY from USB devices via OpenCV/V4L2 —
+no ROS image topics involved.
 
 Mental model:
   ├── File tailer threads (one per log file)
@@ -14,36 +16,66 @@ Mental model:
   │   ├── alerts_log.json    → ALERT → TCP :6000 (with ACK)
   │   └── navigation_log.json→ MODE/ESTOP/FACE_TASK → TCP :6000 (with ACK)
   ├── Heartbeat thread       → TCP :6000 at 10 Hz
-  └── Video thread           → /camera/image_raw frames → UDP :5600
-      (reads encoded frames from video_frames/ folder dropped by logger)
+  ├── Camera threads (one per USB device, no ROS)
+  │   ├── Main camera   → MAIN_CAM   (see CONFIG below) → UDP :5600
+  │   └── Turret camera → TURRET_CAM (see CONFIG below) → UDP :5601
+  └── Command receiver       → UDP :5700 ←Base   SERVO commands
+      └── Serial link to turret Arduino (PAN/TILT)
+
+All settings live in the CONFIG block below — edit and run, no CLI flags.
 
 Usage:
-    pip install msgpack opencv-python numpy
-    python3 ugv_gcs_bridge.py --gcs-ip 192.168.88.2
-
-    # Disable video:
-    python3 ugv_gcs_bridge.py --gcs-ip 192.168.88.2 --no-video
-
-    # Custom log directory:
-    python3 ugv_gcs_bridge.py --gcs-ip 192.168.88.2 --log-dir ~/robot_logs
+    pip install msgpack opencv-python numpy pyserial
+    python3 ugv_gcs_bridge.py
 """
-
-import argparse
+import glob
 import json
 import os
 import socket
 import struct
+import subprocess
 import threading
 import time
 import logging
 
 import msgpack
+import serial
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
 log = logging.getLogger("ugv_bridge")
+
+# ═══════════════════════════════════════════════════════════════════════════
+# CONFIG — edit these instead of passing CLI flags
+# ═══════════════════════════════════════════════════════════════════════════
+
+GCS_IP  = "192.168.88.2"                       # GCS laptop IP
+LOG_DIR = os.path.expanduser("~/robot_logs")   # telemetry log directory
+
+ENABLE_VIDEO       = True   # set False to disable both camera streams
+ENABLE_TURRET_CAM  = True   # set False to stream only the main camera
+
+# Stable by-id paths — survive reboots and USB port swaps, unlike /dev/videoN.
+# Always use the "-video-index0" symlink (index1 is a metadata-only node on
+# most UVC webcams and won't produce readable frames via OpenCV).
+# MAIN_CAM   = "/dev/v4l/by-id/usb-EMEET_EMEET_SmartCam_C950_4K_A260131000702152-video-index0"
+TURRET_CAM = "/dev/v4l/by-id/usb-Image+_Angetube Live Camera_HU1234567898-video-index0"
+MAIN_CAM = glob.glob("/dev/v4l/by-id/*Angetube*video-index0")[0]
+
+CAM_WIDTH    = 640
+CAM_HEIGHT   = 480
+CAM_FPS      = 20
+CAM_FOURCC   = "MJPG"
+CAM_QUALITY  = 60   # JPEG quality 0-100
+
+# Turret servo Arduino — stable by-id path (survives reboots/port swaps,
+# unlike /dev/ttyUSB0 which can shift if another serial device is plugged in).
+SERVO_SERIAL_PORT = "/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0"
+SERVO_SERIAL_BAUD = 115200
+
+# ═══════════════════════════════════════════════════════════════════════════
 
 # ─── Ports (must match gcs_receiver.py) ──────────────────────────────────────
 UDP_IMU_PORT     = 5000
@@ -56,11 +88,12 @@ UDP_VIDEO_PORT   = 5600
 UDP_TURRET_VIDEO_PORT = 5601
 TCP_CMD_PORT     = 6000
 TCP_FILE_PORT    = 7000
+UDP_CMD_IN_PORT  = 5700   # ←Base  SERVO / other commands (must match base's UDP_ROVER_CMD_PORT)
 
 CMD_RETRANSMIT_INTERVAL = 0.5
 CMD_MAX_RETRIES         = 10
 CHUNK_SIZE              = 60000   # bytes per UDP video packet
-TAIL_INTERVAL           = 0.05   # seconds between file tail polls (50ms)
+TAIL_INTERVAL           = 0.05    # seconds between file tail polls (50ms)
 
 
 # ─── UDP sender ───────────────────────────────────────────────────────────────
@@ -203,6 +236,185 @@ class VideoSender:
                 pass
 
     def close(self):
+        self._sock.close()
+
+
+# ─── USB camera streamer (direct V4L2 capture, no ROS) ───────────────────────
+class UsbCameraStreamer:
+    """
+    Opens a USB webcam directly via OpenCV/V4L2, continuously reads frames,
+    JPEG-encodes them, and pushes them straight into a VideoSender.
+    No file intermediary, no ROS image topic — this replaces the old
+    rover_logger.py -> video_frames/ -> file-watcher path entirely.
+    """
+
+    def __init__(self, device: str, sender: "VideoSender", label: str,
+                 width: int = 640, height: int = 480, fps: int = 20,
+                 fourcc: str = "MJPG", quality: int = 60,
+                 power_line_freq: int = 1):
+        self._device   = device
+        self._sender   = sender
+        self._label    = label
+        self._width    = width
+        self._height   = height
+        self._fps      = fps
+        self._fourcc   = fourcc
+        self._quality  = quality
+        self._power_line_freq = power_line_freq  # 1 = 50Hz, 2 = 60Hz, 0 = off
+
+        self._cap      = None
+        self._running  = False
+        self._thread   = None
+        self._frame_interval = 1.0 / fps if fps > 0 else 0.0
+
+    def _apply_v4l2_controls(self):
+        if self._power_line_freq is None:
+            return
+        try:
+            subprocess.run(
+                ["v4l2-ctl", "-d", self._device,
+                 "-c", f"power_line_frequency={self._power_line_freq}"],
+                check=False, capture_output=True, timeout=2.0,
+            )
+        except Exception as e:
+            log.warning("[%s] v4l2-ctl control failed: %s", self._label, e)
+
+    def start(self):
+        import cv2
+        self._apply_v4l2_controls()
+
+        # OpenCV's V4L2 backend can fail to open a device "by name" when the
+        # path contains characters like spaces (common in by-id symlinks
+        # built from a camera's USB product-name string, e.g. cameras whose
+        # descriptor is "Angetube Live Camera"). Resolving the symlink to
+        # its real /dev/videoN target sidesteps that backend limitation
+        # while still letting us select the camera by its stable by-id path.
+        resolved = os.path.realpath(self._device)
+        if resolved != self._device:
+            log.info("[%s] Resolved %s → %s", self._label, self._device, resolved)
+
+        self._cap = cv2.VideoCapture(resolved, cv2.CAP_V4L2)
+        if self._fourcc:
+            self._cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*self._fourcc))
+        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH,  self._width)
+        self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._height)
+        self._cap.set(cv2.CAP_PROP_FPS,          self._fps)
+
+        if not self._cap.isOpened():
+            log.error("[%s] Failed to open USB camera %s (resolved: %s) — check the "
+                       "device path (try `v4l2-ctl --list-devices` or `ls /dev/video*`)",
+                       self._label, self._device, resolved)
+            return False
+
+        self._running = True
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+        log.info("[%s] Streaming %s (%dx%d @ %dfps, %s) → UDP :%d",
+                  self._label, self._device, self._width, self._height,
+                  self._fps, self._fourcc, self._sender._addr[1])
+        return True
+
+    def _loop(self):
+        import cv2
+        fail_count = 0
+        last_sent = 0.0
+        while self._running:
+            ok, frame = self._cap.read()
+            if not ok or frame is None:
+                fail_count += 1
+                if fail_count % 30 == 1:
+                    log.warning("[%s] Frame read failed (%d total) — retrying",
+                                self._label, fail_count)
+                time.sleep(0.05)
+                continue
+            fail_count = 0
+
+            now = time.time()
+            if now - last_sent < self._frame_interval:
+                continue
+            last_sent = now
+
+            ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, self._quality])
+            if not ok:
+                continue
+            self._sender.send_frame(buf.tobytes())
+
+    def stop(self):
+        self._running = False
+        if self._thread is not None:
+            self._thread.join(timeout=2.0)
+        if self._cap is not None:
+            self._cap.release()
+
+
+# ─── Serial link to turret Arduino ────────────────────────────────────────────
+class SerialTurret:
+    """
+    Owns the serial connection to the turret Arduino and translates
+    SERVO commands into the Arduino sketch's "PAN:x,TILT:y" wire format.
+    Fails soft — if the port isn't there at startup, commands are just
+    logged and dropped instead of crashing the whole bridge.
+    """
+
+    def __init__(self, port: str, baud: int):
+        self._ser = None
+        try:
+            self._ser = serial.Serial(port, baud, timeout=0.2)
+            time.sleep(2)  # Arduino resets when the serial port opens
+            log.info("Turret serial connected on %s @ %d", port, baud)
+        except Exception as e:
+            log.warning("Turret serial unavailable (%s): %s — SERVO commands will be dropped", port, e)
+
+    def send(self, pan: float, tilt: float):
+        if not self._ser:
+            log.debug("Turret serial not connected — dropping PAN=%.1f TILT=%.1f", pan, tilt)
+            return
+        try:
+            self._ser.write(f"PAN:{pan:.1f},TILT:{tilt:.1f}\n".encode())
+        except Exception as e:
+            log.warning("Turret serial write failed: %s", e)
+
+    def close(self):
+        if self._ser:
+            self._ser.close()
+
+
+# ─── UDP command receiver (Base → Rover) ──────────────────────────────────────
+class CmdReceiver:
+    """
+    Listens for JSON commands forwarded from the base station's
+    _forward_to_rover() (base_bridge.py). Currently handles SERVO;
+    extend the dispatch below for future command types.
+    """
+
+    def __init__(self, port: int, turret: SerialTurret):
+        self._turret  = turret
+        self._sock    = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._sock.bind(("0.0.0.0", port))
+        self._sock.settimeout(1.0)
+        self._running = True
+        threading.Thread(target=self._run, daemon=True).start()
+        log.info("Command receiver listening on :%d", port)
+
+    def _run(self):
+        while self._running:
+            try:
+                data, addr = self._sock.recvfrom(4096)
+                cmd = json.loads(data.decode())
+                ctype = cmd.get("type", "")
+                if ctype == "SERVO":
+                    pan  = float(cmd.get("pan", 0))
+                    tilt = float(cmd.get("tilt", 0))
+                    self._turret.send(pan, tilt)
+                    log.debug("SERVO ← %s  PAN=%.1f TILT=%.1f", addr[0], pan, tilt)
+            except socket.timeout:
+                continue
+            except Exception as e:
+                log.warning("Cmd receiver error: %s", e)
+
+    def stop(self):
+        self._running = False
         self._sock.close()
 
 
@@ -352,20 +564,13 @@ def _start_heartbeat(tcp: TcpCmdSender, stop_event: threading.Event):
 
 # ─── Entry point ──────────────────────────────────────────────────────────────
 def main():
-    parser = argparse.ArgumentParser(description="UGV → GCS bridge (no ROS)")
-    parser.add_argument("--gcs-ip",   required=True,                    help="GCS laptop IP")
-    parser.add_argument("--log-dir",  default=os.path.expanduser("~/robot_logs"),
-                                                                         help="Log directory (default: ~/robot_logs)")
-    parser.add_argument("--no-video", action="store_true",               help="Disable video stream")
-    args = parser.parse_args()
+    log_dir = LOG_DIR
+    log.info("Reading telemetry logs from %s", log_dir)
+    log.info("Sending to GCS at %s", GCS_IP)
 
-    log_dir = args.log_dir
-    log.info("Reading logs from %s", log_dir)
-    log.info("Sending to GCS at %s", args.gcs_ip)
-
-    udp  = UdpSender(args.gcs_ip)
-    tcp  = TcpCmdSender(args.gcs_ip)
-    file = TcpFileSender(args.gcs_ip)
+    udp  = UdpSender(GCS_IP)
+    tcp  = TcpCmdSender(GCS_IP)
+    file = TcpFileSender(GCS_IP)
 
     stop = threading.Event()
 
@@ -376,7 +581,7 @@ def main():
     log.info("Waiting 3s for TCP to connect...")
     time.sleep(3)
 
-    # Start one tailer thread per log file
+    # Start one tailer thread per telemetry log file (unrelated to video)
     tailers = [
         (os.path.join(log_dir, "state_log.json"),
             lambda e: _dispatch_state(e, udp)),
@@ -395,62 +600,37 @@ def main():
     for path, fn in tailers:
         _start_tailer(path, fn, stop)
 
-    # Video sender — reads JPEG frames dropped by logger into shared folders
-    vsend = None
-    vsend_turret = None
-    if not args.no_video:
+    # ── USB camera streams — direct capture, no ROS, no file intermediary ────
+    main_streamer = None
+    turret_streamer = None
+    if ENABLE_VIDEO:
         try:
-            import cv2
-            import numpy as np
-
-            def _make_watcher(folder: str, sender: "VideoSender", label: str):
-                os.makedirs(folder, exist_ok=True)
-                def _loop():
-                    seen = set()
-                    while not stop.is_set():
-                        try:
-                            # Only pick up finished .jpg files — logger writes to
-                            # .tmp first then renames, so anything still .tmp is
-                            # mid-write and would decode as a black/corrupt frame.
-                            files = sorted(
-                                f for f in os.listdir(folder) if f.endswith(".jpg")
-                            )
-                            for fname in files:
-                                if fname in seen:
-                                    continue
-                                seen.add(fname)
-                                fpath = os.path.join(folder, fname)
-                                try:
-                                    with open(fpath, "rb") as f:
-                                        data = f.read()
-                                    if data:
-                                        sender.send_frame(data)
-                                except OSError as e:
-                                    log.warning("%s: failed reading %s: %s", label, fname, e)
-                                finally:
-                                    try:
-                                        os.remove(fpath)
-                                    except OSError:
-                                        pass
-                            if len(seen) > 500:
-                                seen.clear()
-                        except Exception as e:
-                            log.warning("%s video loop error: %s", label, e)
-                        time.sleep(0.033)   # ~30 fps poll
-                threading.Thread(target=_loop, daemon=True).start()
-
-            # Main camera
-            vsend = VideoSender(args.gcs_ip, port=UDP_VIDEO_PORT)
-            log.info("Main camera sender ready on UDP :%d", UDP_VIDEO_PORT)
-            _make_watcher(os.path.join(log_dir, "video_frames"), vsend, "main")
-
-            # Turret / face detection camera
-            vsend_turret = VideoSender(args.gcs_ip, port=UDP_TURRET_VIDEO_PORT)
-            log.info("Turret camera sender ready on UDP :%d", UDP_TURRET_VIDEO_PORT)
-            _make_watcher(os.path.join(log_dir, "video_frames_turret"), vsend_turret, "turret")
-
+            import cv2  # noqa: F401 — just checking it's importable
         except ImportError:
             log.warning("opencv-python not installed — video disabled")
+        else:
+            vsend_main = VideoSender(GCS_IP, port=UDP_VIDEO_PORT)
+            main_streamer = UsbCameraStreamer(
+                MAIN_CAM, vsend_main, "main",
+                width=CAM_WIDTH, height=CAM_HEIGHT,
+                fps=CAM_FPS, fourcc=CAM_FOURCC, quality=CAM_QUALITY,
+            )
+            if not main_streamer.start():
+                main_streamer = None
+
+            if ENABLE_TURRET_CAM:
+                vsend_turret = VideoSender(GCS_IP, port=UDP_TURRET_VIDEO_PORT)
+                turret_streamer = UsbCameraStreamer(
+                    TURRET_CAM, vsend_turret, "turret",
+                    width=CAM_WIDTH, height=CAM_HEIGHT,
+                    fps=CAM_FPS, fourcc=CAM_FOURCC, quality=CAM_QUALITY,
+                )
+                if not turret_streamer.start():
+                    turret_streamer = None
+
+    # ── Turret servo — serial link + command receiver ────────────────────────
+    turret = SerialTurret(SERVO_SERIAL_PORT, SERVO_SERIAL_BAUD)
+    cmd_rx = CmdReceiver(UDP_CMD_IN_PORT, turret)
 
     log.info("Bridge running. Press Ctrl+C to stop.")
     try:
@@ -461,10 +641,12 @@ def main():
         stop.set()
         udp.close()
         tcp.close()
-        if vsend:
-            vsend.close()
-        if vsend_turret:
-            vsend_turret.close()
+        cmd_rx.stop()
+        turret.close()
+        if main_streamer:
+            main_streamer.stop()
+        if turret_streamer:
+            turret_streamer.stop()
 
 
 if __name__ == "__main__":

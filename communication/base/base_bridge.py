@@ -96,6 +96,7 @@ _state = {
     "ages":     {},
     "waypoints": [],
     "last_hb":  0.0,
+    "servo": {"pan": 0, "tilt": 0, "ts": 0},
 }
 
 # Last-seen timestamps for age computation
@@ -543,6 +544,14 @@ async def _ws_handler(websocket):
                         _state["drive"]["vx"] = 0
                         _state["drive"]["wz"] = 0
                     _add_alert("E-STOP from GUI", "danger")
+                    _forward_to_rover(cmd)
+                elif ctype == "SERVO":
+                    pan  = float(cmd.get("pan", 0))
+                    tilt = float(cmd.get("tilt", 0))
+                    with _lock:
+                        _state["servo"]["pan"]  = pan
+                        _state["servo"]["tilt"] = tilt
+                        _state["servo"]["ts"]   = _ts()
                     _forward_to_rover(cmd)
             except Exception as e:
                 log.debug("WS cmd parse: %s", e)

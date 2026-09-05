@@ -56,4 +56,22 @@
     <origin xyz="0 0 0" rpy="-1.5708 0 -1.5708"/>
   </joint>
 
+
+  <link name="gps_link">
+      <visual>
+        <geometry>
+          <box size="0.03 0.03 0.02"/>
+        </geometry>
+        <origin xyz="0 0 0"/>
+        <material name="white">
+          <color rgba="1 1 1 1"/>
+        </material>
+      </visual>
+    </link>
+
+    <joint name="gps_joint" type="fixed">
+      <parent link="base_link"/>
+      <child link="gps_link"/>
+      <origin xyz="0 0 0.2"/>
+    </joint>
 </robot>

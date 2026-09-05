@@ -14,7 +14,7 @@ navsat_transform_node:
     #
     # PLACEHOLDER — replace with real measured values:
     wait_for_datum: true
-    datum: [28.7531, 77.1177, 0.0]
+    datum: [30.08065248, 31.29662713, 1.0471975511965976]
 
     # ── Magnetic declination ──────────────────────────────────────────────────
     # Compute for your exact location & date:

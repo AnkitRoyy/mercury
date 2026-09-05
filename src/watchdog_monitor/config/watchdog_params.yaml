@@ -54,14 +54,14 @@ waypoints:
   ros__parameters:
     # Waypoints in map/world frame coordinates [x1, y1, x2, y2, ...]
     # HOME (4th waypoint) is appended at runtime by mission_setup.py
-    waypoints: [15.57, -35.36, 2.58, -31.84, -11.21, -35.05]
+    waypoints: [30.0812120422, 31.2961983329, 30.08419783, 31.2962010261, 30.081102905, 31.2960926525]
     waypoint_names: ["WP-1", "WP-2", "WP-3"]
     # Arrival detection radius (metres)
     arrival_radius: 2.0
     # How often to publish status summary (seconds)
     status_interval: 0.5
     # Odometry topic
-    odom_topic: "/diff_drive_controller/odom"
+    odom_topic: "/odom"
     # Frames used for live map->odom TF lookup (replaces static spawn_x/y/yaw)
     map_frame: "map"
     odom_frame: "odom"

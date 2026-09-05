@@ -9,6 +9,7 @@ from launch_ros.actions import Node
 LIDAR_PORT  = '/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_47bd82635cda7e44a9f4fb6e59533130-if00-port0'
 TEENSY_PORT = '/dev/serial/by-id/usb-Teensyduino_USB_Serial_19904990-if00'
 GPS_PORT    = '/dev/serial/by-id/usb-u-blox_AG_-_www.u-blox.com_u-blox_GNSS_receiver-if00'
+REALSENSE_SERIAL = ''
 
 # To test higher res later:  pixel_format='mjpeg2rgb', 1280x720
 # Alternative package:       ros-jazzy-v4l2-camera (handles MJPEG correctly)
@@ -56,6 +57,12 @@ def generate_launch_description():
         name='pre_cam_setup',
     )
 
+    fake_encoders = Node(
+        package='hardware',
+        executable='fake_encoders.py',
+        name='fake_encoders',
+        output='screen',
+    )
 
     usb_cam = TimerAction(
         period=1.0,
@@ -106,9 +113,29 @@ def generate_launch_description():
         }],
     )
 
+    realsense = Node(
+        package='realsense2_camera',
+        executable='realsense2_camera_node',
+        name='realsense2_camera',
+        output='screen',
+        parameters=[{
+            'serial_no':          REALSENSE_SERIAL,
+            'enable_gyro':        True,
+            'enable_accel':       True,
+            'unite_imu_method':   2,       # 0=none, 1=copy, 2=linear_interpolation (recommended)
+            'enable_color':       False,   # flip on if you also want RGB
+            'enable_depth':       False,   # flip on if you also want depth
+            'enable_infra1':      False,
+            'enable_infra2':      False,
+            'gyro_fps':           200,
+            'accel_fps':          200,
+        }],
+        remappings=[('/camera/realsense2_camera/imu', '/imu')],
+    )
+
     teensy = Node(
         package='hardware',
-        executable='rpm_converter.py',
+        executable='teensy_driver.py',
         name='teensy',
         output='screen',
         parameters=[{
@@ -120,6 +147,13 @@ def generate_launch_description():
             'enable_serial':    True,
             'enable_debug':     True,
         }],
+    )
+
+    odom = Node(
+        package='hardware',
+        executable='wheel_odom_node.py',
+        name='teensy',
+        output='screen',
     )
 
     gps = Node(
@@ -138,10 +172,13 @@ def generate_launch_description():
 
     return LaunchDescription([
         video_device_arg,
-        pre_cam_setup,      
+        pre_cam_setup,
+        # fake_encoders,      
         usb_cam,            
-        post_cam_ctrls,     
+        post_cam_ctrls,    
         lidar_serial_port_arg, lidar,
         teensy_serial_port_arg, teensy,
+        odom,
         gps_serial_port_arg, gps,
+        realsense
     ])
