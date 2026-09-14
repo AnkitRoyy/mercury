@@ -1,29 +1,145 @@
 <?xml version="1.0"?>
 <robot name="mercury" xmlns:xacro="http://www.ros.org/wiki/xacro">
 
-  <!-- ================= BASE ================= -->
+  <!-- ================= BASE CHASSIS ================= -->
+  <!-- Dimensions: length=55cm (0.55m), width=48cm (0.48m), height=29cm (0.29m) -->
+  <!-- Ground clearance: 9cm (0.09m) -->
+  <!-- Center of chassis box z = 0.09 + (0.29 / 2) = 0.235m -->
   <link name="base_link">
     <visual>
       <geometry>
-        <box size="0.4 0.3 0.1"/>
+        <box size="0.55 0.48 0.29"/>
       </geometry>
-      <origin xyz="0 0 0.05"/>
+      <origin xyz="0 0 0.235" rpy="0 0 0"/>
+      <material name="chassis_color">
+        <color rgba="0.15 0.15 0.18 1.0"/>
+      </material>
     </visual>
   </link>
 
-  <!-- ================= LIDAR ================= -->
+  <!-- ================= LEFT DRIVE WHEEL ================= -->
+  <!-- Diameter = 32cm -> radius = 16cm (0.16m), width = 6cm (0.06m) -->
+  <!-- Wheel center z = 0.16m (touches ground at z=0) -->
+  <!-- Separation = 54cm (0.54m) -> y = +0.27m -->
+  <!-- Note: joint type is "fixed" because there are no physical wheel encoders. -->
+  <!-- This allows robot_state_publisher to broadcast the static TF without waiting for encoder /joint_states -->
+  <link name="left_wheel_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+      <geometry>
+        <cylinder radius="0.16" length="0.06"/>
+      </geometry>
+      <material name="wheel_black">
+        <color rgba="0.05 0.05 0.05 1.0"/>
+      </material>
+    </visual>
+  </link>
+
+  <joint name="left_wheel_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="left_wheel_link"/>
+    <origin xyz="-0.15 0.27 0.16" rpy="0 0 0"/>
+  </joint>
+
+  <!-- ================= RIGHT DRIVE WHEEL ================= -->
+  <!-- Separation = 54cm (0.54m) -> y = -0.27m -->
+  <link name="right_wheel_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+      <geometry>
+        <cylinder radius="0.16" length="0.06"/>
+      </geometry>
+      <material name="wheel_black">
+        <color rgba="0.05 0.05 0.05 1.0"/>
+      </material>
+    </visual>
+  </link>
+
+  <joint name="right_wheel_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="right_wheel_link"/>
+    <origin xyz="-0.15 -0.27 0.16" rpy="0 0 0"/>
+  </joint>
+
+  <!-- ================= FRONT CASTOR WHEEL ================= -->
+  <!-- Castor radius = 3.9cm (0.039m), touches ground at z=0 (origin z = 0.039m) -->
+  <!-- Positioned at front: x = +0.20m, y = 0.0m -->
+  <link name="castor_wheel_link">
+    <visual>
+      <geometry>
+        <sphere radius="0.039"/>
+      </geometry>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <material name="castor_gray">
+        <color rgba="0.5 0.5 0.5 1.0"/>
+      </material>
+    </visual>
+  </link>
+
+  <joint name="castor_wheel_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="castor_wheel_link"/>
+    <origin xyz="0.20 0.0 0.039" rpy="0 0 0"/>
+  </joint>
+
+  <!-- ================= RPLIDAR (laser_link) ================= -->
+  <!-- Mounted on top-front of chassis: z = 0.09 + 0.29 + 0.03 = 0.41m -->
   <link name="laser_link">
     <visual>
       <geometry>
-        <cylinder length="0.05" radius="0.05"/>
+        <cylinder length="0.05" radius="0.04"/>
       </geometry>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <material name="lidar_red">
+        <color rgba="0.8 0.1 0.1 1.0"/>
+      </material>
     </visual>
   </link>
 
   <joint name="laser_joint" type="fixed">
     <parent link="base_link"/>
     <child link="laser_link"/>
-    <origin xyz="0.2 0 0.15" rpy="0 0 3.14159"/>
+    <origin xyz="0.22 0.0 0.41" rpy="0 0 3.14159"/>
+  </joint>
+
+  <!-- ================= IMU FRAME ================= -->
+  <!-- Fixed frame for IMU (ESP32-S3 / RealSense) -->
+  <link name="imu_link">
+    <visual>
+      <geometry>
+        <box size="0.03 0.03 0.02"/>
+      </geometry>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <material name="imu_orange">
+        <color rgba="1.0 0.5 0.0 1.0"/>
+      </material>
+    </visual>
+  </link>
+
+  <joint name="imu_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="imu_link"/>
+    <origin xyz="0.0 0.0 0.39" rpy="0 0 0"/>
+  </joint>
+
+  <!-- ================= GPS FRAME ================= -->
+  <!-- Mounted on top: z = 0.43m -->
+  <link name="gps_link">
+    <visual>
+      <geometry>
+        <box size="0.04 0.04 0.02"/>
+      </geometry>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <material name="gps_white">
+        <color rgba="0.9 0.9 0.9 1.0"/>
+      </material>
+    </visual>
+  </link>
+
+  <joint name="gps_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="gps_link"/>
+    <origin xyz="0.0 0.0 0.43" rpy="0 0 0"/>
   </joint>
 
   <!-- ================= REALSENSE CAMERA BODY ================= -->
@@ -32,11 +148,10 @@
   <joint name="camera_mount_joint" type="fixed">
     <parent link="base_link"/>
     <child link="camera_link"/>
-    <!-- Adjust these values to your real mounting -->
-    <origin xyz="0.15 0 0.12" rpy="0 0 0"/>
+    <origin xyz="0.15 0.0 0.38" rpy="0 0 0"/>
   </joint>
 
-  <!-- ================= IMU FRAME ================= -->
+  <!-- ================= CAMERA IMU FRAMES ================= -->
   <link name="camera_imu_frame"/>
 
   <joint name="camera_imu_joint" type="fixed">
@@ -45,33 +160,13 @@
     <origin xyz="0 0 0" rpy="0 0 0"/>
   </joint>
 
-  <!-- ================= IMU OPTICAL FRAME ================= -->
   <!-- Optical frame rotation: X right, Y down, Z forward -->
   <link name="camera_imu_optical_frame"/>
 
   <joint name="camera_imu_optical_joint" type="fixed">
     <parent link="camera_imu_frame"/>
     <child link="camera_imu_optical_frame"/>
-    <!-- Convert from ROS frame to optical frame -->
     <origin xyz="0 0 0" rpy="-1.5708 0 -1.5708"/>
   </joint>
 
-
-  <link name="gps_link">
-      <visual>
-        <geometry>
-          <box size="0.03 0.03 0.02"/>
-        </geometry>
-        <origin xyz="0 0 0"/>
-        <material name="white">
-          <color rgba="1 1 1 1"/>
-        </material>
-      </visual>
-    </link>
-
-    <joint name="gps_joint" type="fixed">
-      <parent link="base_link"/>
-      <child link="gps_link"/>
-      <origin xyz="0 0 0.2"/>
-    </joint>
 </robot>

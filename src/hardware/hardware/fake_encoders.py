@@ -3,7 +3,7 @@
 fake_encoders.py
 ================
 Publishes fake /wheel_encoders (Float32MultiArray: [rpmFR, rpmFL, rpmRR, rpmRL])
-so wheel_odom_node.py can run without the Teensy connected.
+so wheel_odom_node.py can run without the ESP32-S3 connected.
 
 Default: all wheels same RPM -> robot drives straight.
 Set FAKE_RPM = 0.0 to test pure standing-still odom (still needed for TF to exist).

@@ -4,7 +4,7 @@ set -e
 
 GPS_LOG="$HOME/gps_log.txt"
 GPS_FILTERED="$HOME/gps_filtered.txt"
-AVG_SCRIPT="/home/soap/probes/mercury/avg_coords.py"
+AVG_SCRIPT="/home/ario/leap/documents/ugv/mercury/avg_coords.py"
 
 echo "Checking GPS fix..."
 ros2 topic echo /gps --once || true

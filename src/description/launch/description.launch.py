@@ -2,7 +2,6 @@ from launch import LaunchDescription
 from launch_ros.actions import Node
 from launch.substitutions import Command, LaunchConfiguration
 from launch_ros.parameter_descriptions import ParameterValue
-from ament_index_python.packages import get_package_share_directory
 from launch.actions import DeclareLaunchArgument
 
 def generate_launch_description():
@@ -23,6 +22,13 @@ def generate_launch_description():
     return LaunchDescription([
         declare_xacro_file_arg,
         declare_use_sim_time_arg,
+        Node(
+            package='joint_state_publisher',
+            executable='joint_state_publisher',
+            name='joint_state_publisher',
+            parameters=[{'use_sim_time': use_sim_time}],
+            output='screen'
+        ),
         Node(
             package='robot_state_publisher',
             executable='robot_state_publisher',

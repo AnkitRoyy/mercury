@@ -3,7 +3,7 @@
 <package format="3">
   <name>hardware</name>
   <version>0.0.0</version>
-  <description>Hardware interface nodes and motor control via Teensy</description>
+  <description>Hardware interface nodes and motor control via ESP32-S3</description>
   <maintainer email="dev@todo.todo">dev</maintainer>
   <license>TODO: License declaration</license>
 

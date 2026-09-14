@@ -7,7 +7,7 @@ from launch_ros.actions import Node
 # ─── Serial Port Defaults ────────────────────────────────────────────────────
 
 LIDAR_PORT  = '/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_47bd82635cda7e44a9f4fb6e59533130-if00-port0'
-TEENSY_PORT = '/dev/serial/by-id/usb-Teensyduino_USB_Serial_19904990-if00'
+ESP32_S3_PORT = '/dev/ttyACM0'
 GPS_PORT    = '/dev/serial/by-id/usb-u-blox_AG_-_www.u-blox.com_u-blox_GNSS_receiver-if00'
 REALSENSE_SERIAL = ''
 
@@ -23,7 +23,7 @@ REALSENSE_SERIAL = ''
 #   backlight_compensation   : 0–7               (default=0)
 #   power_line_frequency     : 0=off,1=50Hz,2=60Hz (default=1)
 
-CAM_DEVICE  = '/dev/video3'
+CAM_DEVICE  = '/dev/video8'
 CAM_WIDTH   = 640
 CAM_HEIGHT  = 480
 CAM_FPS     = 30
@@ -95,7 +95,7 @@ def generate_launch_description():
     )
 
     lidar_serial_port_arg  = DeclareLaunchArgument('lidar_serial_port',  default_value=LIDAR_PORT)
-    teensy_serial_port_arg = DeclareLaunchArgument('teensy_serial_port', default_value=TEENSY_PORT)
+    esp32_s3_serial_port_arg = DeclareLaunchArgument('esp32_s3_serial_port', default_value=ESP32_S3_PORT)
     gps_serial_port_arg    = DeclareLaunchArgument('gps_serial_port',    default_value=GPS_PORT)
 
     lidar = Node(
@@ -133,16 +133,16 @@ def generate_launch_description():
         remappings=[('/camera/realsense2_camera/imu', '/imu')],
     )
 
-    teensy = Node(
+    esp32_s3 = Node(
         package='hardware',
-        executable='teensy_driver.py',
-        name='teensy',
+        executable='esp32_s3_driver.py',
+        name='esp32_s3',
         output='screen',
         parameters=[{
-            'wheel_radius':     0.24,
-            'wheel_separation': 0.84,
+            'wheel_radius':     0.16,
+            'wheel_separation': 0.54,
             'max_wheel_rpm':    240.0,
-            'serial_port':      LaunchConfiguration('teensy_serial_port'),
+            'serial_port':      LaunchConfiguration('esp32_s3_serial_port'),
             'serial_baud':      115200,
             'enable_serial':    True,
             'enable_debug':     True,
@@ -152,7 +152,7 @@ def generate_launch_description():
     odom = Node(
         package='hardware',
         executable='wheel_odom_node.py',
-        name='teensy',
+        name='wheel_odom_node',
         output='screen',
     )
 
@@ -177,8 +177,7 @@ def generate_launch_description():
         usb_cam,            
         post_cam_ctrls,    
         lidar_serial_port_arg, lidar,
-        teensy_serial_port_arg, teensy,
-        odom,
+        esp32_s3_serial_port_arg, esp32_s3, odom,
         gps_serial_port_arg, gps,
         realsense
     ])

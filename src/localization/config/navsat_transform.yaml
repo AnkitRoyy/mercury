@@ -7,7 +7,7 @@ navsat_transform_node:
 
     # Datum matches mercury.sdf spherical_coordinates
     wait_for_datum: true
-    datum: [28.7531, 77.1177, 0.0]
+    datum: [28.75305660, 77.11772623, -0.3141592653589793]
 
     magnetic_declination_radians: 0.0
     yaw_offset: 0.0          # 0 = robot X aligns with geographic East

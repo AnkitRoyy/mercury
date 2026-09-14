@@ -21,10 +21,9 @@ ament_python_install_package(${PROJECT_NAME})
 
 # Install Python executables
 install(PROGRAMS
-  hardware/teensy_driver.py
+  hardware/esp32_s3_driver.py
   hardware/wheel_odom_node.py
   hardware/fake_encoders.py
-  hardware/wheel_odom_node.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
