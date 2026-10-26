@@ -1,8 +1,8 @@
 {
-    "h_min": 0,
+    "h_min": 8,
     "h_max": 180,
     "s_min": 0,
-    "s_max": 177,
-    "v_min": 17,
-    "v_max": 52
+    "s_max": 55,
+    "v_min": 0,
+    "v_max": 104
 }

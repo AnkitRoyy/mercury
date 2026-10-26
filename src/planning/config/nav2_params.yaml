@@ -15,7 +15,7 @@ planner_server:
       max_iterations: 1000000
       max_on_approach_iterations: 1000
       max_planning_time: 5.0
-      cost_travel_multiplier: 2.0
+      cost_travel_multiplier: 1.0     # 1.0 allows planner to confidently navigate through tight gaps
       use_final_approach_orientation: false
       smoother:
         max_iterations: 1000
@@ -38,30 +38,30 @@ controller_server:
 
     goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.5
+      xy_goal_tolerance: 0.35
       yaw_goal_tolerance: 0.8
       stateful: True
 
     FollowPath:
       plugin: "dwb_core::DWBLocalPlanner"
 
-      min_vel_x: 0.0
-      max_vel_x: 0.5
-      max_vel_theta: 1.2
+      min_vel_x: 0.15           # No reversing during path following (prevents 180° spin-and-reverse)
+      max_vel_x: 0.22
+      max_vel_theta: 0.65       # Increased from 0.45 -> ~37 deg/sec for agile, responsive turning
 
       min_speed_xy: 0.0
-      max_speed_xy: 0.5
+      max_speed_xy: 0.22
       min_speed_theta: 0.0
 
-      acc_lim_x: 1.0
-      acc_lim_theta: 2.0
-      decel_lim_x: -2.5
-      decel_lim_theta: -2.0
+      acc_lim_x: 0.8
+      acc_lim_theta: 1.2        # Increased from 0.8 -> quick evasive steering without sluggish delay
+      decel_lim_x: -2.0
+      decel_lim_theta: -1.2     # Controlled rotational deceleration
 
       vx_samples: 20
       vtheta_samples: 35
 
-      sim_time: 2.5
+      sim_time: 4.0             # 4.0s @ 0.22m/s = 0.88m (projects 48cm ahead of 80cm bot front edge)
       linear_granularity: 0.05
       angular_granularity: 0.025
 
@@ -71,14 +71,38 @@ controller_server:
         - RotateToGoal
         - Oscillation
         - BaseObstacle
+        - ObstacleFootprint
         - GoalAlign
         - PathAlign
         - PathDist
         - GoalDist
 
-      BaseObstacle.scale: 0.02
-      PathAlign.scale: 32.0
-      PathDist.scale: 32.0
-      GoalAlign.scale: 24.0
-      GoalDist.scale: 24.0
-      RotateToGoal.scale: 32.0
+      # Obstacle avoidance vs Path following balance
+      BaseObstacle.scale: 4.0
+      ObstacleFootprint.scale: 8.0   # Explicitly checks rectangular footprint & tyres along trajectory
+      PathAlign.scale: 8.0           # Lowered from 12.0 so controller deviates proactively around obstacles
+      PathDist.scale: 8.0            # Lowered from 12.0 so controller deviates proactively around obstacles
+      GoalAlign.scale: 10.0
+      GoalDist.scale: 10.0
+      RotateToGoal.scale: 10.0       # Calmed -> prevents forcing in-place turn if tail could swing into obstacle
+
+behavior_server:
+  ros__parameters:
+    use_sim_time: True
+    costmap_topic: local_costmap/costmap_raw
+    footprint_topic: local_costmap/published_footprint
+    cycle_frequency: 10.0
+    behavior_plugins: ["spin", "backup", "wait"]
+    spin:
+      plugin: "nav2_behaviors::Spin"
+    backup:
+      plugin: "nav2_behaviors::BackUp"
+    wait:
+      plugin: "nav2_behaviors::Wait"
+    global_frame: odom
+    robot_base_frame: base_link
+    transform_timeout: 0.2
+    simulate_ahead_time: 2.0
+    max_rotational_vel: 0.65
+    min_rotational_vel: 0.1
+    rotational_acc_lim: 1.2

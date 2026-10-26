@@ -5,25 +5,11 @@ navsat_transform_node:
     frequency: 10.0
     delay: 3.0
 
-    # ── Datum: MUST be measured on-site before competition ────────────────────
-    # datum: [latitude, longitude, yaw_offset_radians]
-    #   yaw_offset_rad = radians(90 - true_heading_degrees)
-    #   where true_heading is the compass bearing (from true North, clockwise)
-    #   of the robot's forward axis at the datum/start position.
-    #   Normalize result to [-π, π].
-    #
-    # PLACEHOLDER — replace with real measured values:
+    # ── Datum: Initial reference point [latitude, longitude, yaw_offset_radians]
     wait_for_datum: true
     datum: [28.75305660, 77.11772623, -0.3141592653589793]
 
-    # ── Magnetic declination ──────────────────────────────────────────────────
-    # Compute for your exact location & date:
-    #   https://www.ngdc.noaa.gov/geomag/calculators/magcalc.shtml
-    # Delhi area ≈ 0.6° East → ~0.0105 rad (as of 2026)
     magnetic_declination_radians: 0.0
-
-    # yaw_offset is separate from datum[2] — leave at 0.0 since yaw
-    # correction is encoded in the datum's 3rd element
     yaw_offset: 0.0
 
     zero_altitude: true              # ignore GPS altitude (flat outdoor field)
@@ -31,6 +17,7 @@ navsat_transform_node:
     broadcast_utm_transform_as_parent_frame: false
     publish_filtered_gps: false
 
-    # Use the EKF's fused heading (which includes IMU), not GPS-only heading
-    use_odometry_yaw: false
+    # Use the local EKF's fused heading (from gyro integration), 
+    # since RealSense D455 IMU does not have a magnetic compass.
+    use_odometry_yaw: true
     use_local_cartesian: false

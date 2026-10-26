@@ -25,8 +25,10 @@ global_costmap:
       origin_x:  -75.0
       origin_y:  -75.0
 
-      footprint: "[[0.25, 0.20], [0.25, -0.20], [-0.25, -0.20], [-0.25, 0.20]]"
-      footprint_padding: 0.02
+      # Bot assumed 80x80 cm (0.80m x 0.80m) -> half-extents ±0.40m
+      # Circumscribed radius ≈ 0.57m. Padding 0.03m gives 86x86 cm effective safety envelope.
+      footprint: "[[0.40, 0.40], [0.40, -0.40], [-0.40, -0.40], [-0.40, 0.40]]"
+      footprint_padding: 0.03
 
       plugins:
         - lane_layer
@@ -73,5 +75,5 @@ global_costmap:
 
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        inflation_radius: 0.6
-        cost_scaling_factor: 0.5 #0.5
+        inflation_radius: 0.70          # 70cm: matches local costmap & exceeds 80x80cm circumscribed radius (57cm)
+        cost_scaling_factor: 2.8

@@ -21,17 +21,20 @@ def generate_launch_description():
             'image_topic':        '/camera/image_raw',
             'show_debug':         True,
 
-            'roi_top_frac':       0.4,
+            'roi_top_frac':       0.35,
 
-            'white_v_min':        160,
+            'white_v_min':        170,
             'white_s_max':        60,
 
-            'close_kw':           7,
-            'close_kh':           30,
+            'close_kw':           5,
+            'close_kh':           25,
 
-            'hough_threshold':    10,
-            'hough_min_len':      15.0,
-            'hough_max_gap':      50.0,
+            'hough_threshold':    15,
+            'hough_min_len':      20.0,
+            'hough_max_gap':      40.0,
+
+            'canny_low':          30.0,
+            'canny_high':         100.0,
 
             'min_slope_abs':      0.2,
             'max_slope_abs':      4.0,
@@ -60,11 +63,11 @@ def generate_launch_description():
             'camera_hfov':   1.047,
             'image_width':   640,
             'image_height':  480,
-            'roi_top_frac':  0.4,
+            'roi_top_frac':  0.35,
 
             # Detection
-            'white_v_min':   130,
-            'white_s_max':   80,
+            'white_v_min':   170,
+            'white_s_max':   60,
             'sample_rows':   8,
 
             # ── Pothole filter (minAreaRect aspect only) ─────────────────
@@ -76,7 +79,7 @@ def generate_launch_description():
             'blob_min_area':    60,
 
             # Hough
-            'hough_min_len':    25.0,
+            'hough_min_len':    20.0,
             'hough_max_gap':    40.0,
             'hough_threshold':  15,
 

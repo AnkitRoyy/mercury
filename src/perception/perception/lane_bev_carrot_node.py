@@ -64,8 +64,8 @@ class LaneBevCarrotNode(Node):
         self.declare_parameter('fit_cache_sec',           1.0)
         self.declare_parameter('no_carrot_stop_streak',   3)   # kept for logging only
         self.declare_parameter('safe_cost_max',           50)
-        self.declare_parameter('min_clear_m',             0.6)
-        self.declare_parameter('safety_radius',           0.30)
+        self.declare_parameter('min_clear_m',             0.70) # safe clearance from laser scan for 80cm bot
+        self.declare_parameter('safety_radius',           0.45) # 45cm: accommodates 40cm half-width of 80x80cm bot
         self.declare_parameter('max_carrot_dist_m',       4.0)
         
 
@@ -130,6 +130,8 @@ class LaneBevCarrotNode(Node):
         self._last_fit        = None
         self._last_fit_stamp  = None
         self._streak          = 0
+        self._goal_reached    = False
+        self._last_pub_carrot = None
 
         # road costmap
         self._road_grid = None
@@ -169,10 +171,13 @@ class LaneBevCarrotNode(Node):
         self.create_subscription(Bool, '/done',  self._done_cb,  10)
     # ── callbacks ──────────────────────────────────────────────────────
 
-    def _goal_cb(self, msg):
+    def _goal_cb(self, msg: PoseStamped):
         self._final_goal  = msg
         self._streak      = 0
         self._goal_reached = False
+        self._last_pub_carrot = None
+        self.get_logger().info(
+            f'Received /final_goal at ({msg.pose.position.x:.2f}, {msg.pose.position.y:.2f})')
 
     def _odom_cb(self, msg):
         self._robot_x = msg.pose.pose.position.x
@@ -318,32 +323,37 @@ class LaneBevCarrotNode(Node):
 
     # ── fallback carrot helpers ────────────────────────────────────────
 
-    def _fallback_carrot(self, rx_map: float, ry_map: float, fwd: np.ndarray, map_yaw: float):
+    def _fallback_carrot(self, rx_map: float, ry_map: float,
+                         goal_fwd: np.ndarray, goal_yaw: float,
+                         dist_to_goal: float) -> tuple | None:
         """
-        Sweep a grid of MAP-FRAME points ahead with lateral offsets.
-        rx_map, ry_map: robot position in MAP frame (from cam_pos projected to z=0,
-                        or base_link TF — NOT self._robot_x/y which is odom-frame).
+        Sweep a grid of MAP-FRAME points towards _final_goal with lateral offsets.
+        Uses the goal vector (goal_yaw), NOT map_yaw, so candidate carrots NEVER
+        point away or backward when the robot rotates to avoid obstacles.
         """
-        lat_x = -math.sin(map_yaw)
-        lat_y =  math.cos(map_yaw)
+        lat_x = -math.sin(goal_yaw)
+        lat_y =  math.cos(goal_yaw)
 
         for dist in self._fallback_dists:
+            if dist > dist_to_goal:
+                continue
             for lateral in self._fallback_laterals:
-                cx = rx_map + dist * fwd[0] + lateral * lat_x
-                cy = ry_map + dist * fwd[1] + lateral * lat_y
+                cx = rx_map + dist * goal_fwd[0] + lateral * lat_x
+                cy = ry_map + dist * goal_fwd[1] + lateral * lat_y
+
+                # Candidate vector must make positive forward progress along goal ray
+                dp = (cx - rx_map) * goal_fwd[0] + (cy - ry_map) * goal_fwd[1]
+                if dp <= 0.0:
+                    continue
+
                 if self._is_safe(cx, cy):
                     self.get_logger().info(
                         f'[fallback] carrot ({cx:.2f},{cy:.2f}) '
-                        f'dist={dist:.2f}m lat={lateral:+.2f}m')
+                        f'dist={dist:.2f}m lat={lateral:+.2f}m',
+                        throttle_duration_sec=1.0)
                     return (cx, cy)
         return None
 
-    def _straight_ahead_carrot(self, rx_map: float, ry_map: float, map_yaw: float) -> tuple:
-        """Emergency: unconditionally place carrot straight ahead in MAP frame."""
-        cx = rx_map + self._straight_dist * math.cos(map_yaw)
-        cy = ry_map + self._straight_dist * math.sin(map_yaw)
-        self.get_logger().warn(f'[straight-ahead] emergency carrot ({cx:.2f},{cy:.2f})')
-        return (cx, cy)
     def _start_cb(self, msg: Bool):
         if msg.data:
             self._paused = True
@@ -353,20 +363,39 @@ class LaneBevCarrotNode(Node):
         if msg.data:
             self._paused = False
             self.get_logger().info('Carrot resumed — face task complete.')
-    # ── main tick ──────────────────────────────────────────────────────
 
-    def _publish_carrot(self, carrot: tuple, rx_map: float, ry_map: float):
-        dx  = carrot[0] - rx_map
-        dy  = carrot[1] - ry_map
-        yaw = math.atan2(dy, dx)
+    # ── main tick & publishing ─────────────────────────────────────────
+
+    def _should_publish(self, carrot: tuple, is_final: bool = False) -> bool:
+        if self._last_pub_carrot is None:
+            return True
+        dist_moved = math.hypot(carrot[0] - self._last_pub_carrot[0],
+                                carrot[1] - self._last_pub_carrot[1])
+        # If it is the final goal and already published, do NOT spam Nav2
+        if is_final:
+            return dist_moved > 0.05
+        # If intermediate carrot moved significantly (> 0.25m), update Nav2
+        return dist_moved >= 0.25
+
+    def _publish_carrot(self, carrot: tuple, rx_map: float, ry_map: float, is_final: bool = False):
         msg = PoseStamped()
         msg.header.stamp    = self.get_clock().now().to_msg()
         msg.header.frame_id = 'map'
         msg.pose.position.x = carrot[0]
         msg.pose.position.y = carrot[1]
-        msg.pose.orientation.z = math.sin(yaw / 2)
-        msg.pose.orientation.w = math.cos(yaw / 2)
+
+        if is_final and self._final_goal is not None:
+            # Preserve user's exact goal orientation requested in RViz / GPS mission
+            msg.pose.orientation = self._final_goal.pose.orientation
+        else:
+            dx  = carrot[0] - rx_map
+            dy  = carrot[1] - ry_map
+            yaw = math.atan2(dy, dx)
+            msg.pose.orientation.z = math.sin(yaw / 2.0)
+            msg.pose.orientation.w = math.cos(yaw / 2.0)
+
         self._pub.publish(msg)
+        self._last_pub_carrot = (carrot[0], carrot[1])
 
     def _tick(self):
         if self._final_goal is None or self._last_img is None:
@@ -395,10 +424,12 @@ class LaneBevCarrotNode(Node):
 
         # ── Goal reached ───────────────────────────────────────────────
         if dist_to_goal < self._goal_tol:
-            self.get_logger().info('Goal reached!')
+            self.get_logger().info(
+                f'Goal reached! (dist={dist_to_goal:.2f}m < {self._goal_tol:.2f}m)')
             self._final_goal = None
             self._streak = 0
             self._goal_reached = True
+            self._last_pub_carrot = None
             return
 
         if self._goal_reached:
@@ -411,7 +442,8 @@ class LaneBevCarrotNode(Node):
             self.get_logger().info(
                 f'[proximity] dist={dist_to_goal:.2f}m < {proximity_threshold:.2f}m → pinning carrot to goal',
                 throttle_duration_sec=1.0)
-            self._publish_carrot(carrot, rx_map, ry_map)
+            if self._should_publish(carrot, is_final=True):
+                self._publish_carrot(carrot, rx_map, ry_map, is_final=True)
             return
 
         # ── Camera TF ──────────────────────────────────────────────────
@@ -463,25 +495,48 @@ class LaneBevCarrotNode(Node):
                 if score < best_score:
                     best_score = score; carrot = pt
 
-        # ── Fallback chain ─────────────────────────────────────────────
+        # ── Fallback chain towards _final_goal ─────────────────────────
+        goal_dx = gx - rx_map
+        goal_dy = gy - ry_map
+        goal_dist = math.hypot(goal_dx, goal_dy)
+
         if carrot is None:
             self._streak += 1
-            self.get_logger().warn(
-                f'No BEV carrot (streak={self._streak}) — trying lateral sweep',
-                throttle_duration_sec=1.0)
-            carrot = self._fallback_carrot(rx_map, ry_map, fwd, map_yaw)
+            if goal_dist > 1e-3:
+                goal_yaw = math.atan2(goal_dy, goal_dx)
+                goal_fwd = np.array([math.cos(goal_yaw), math.sin(goal_yaw)])
+                carrot = self._fallback_carrot(rx_map, ry_map, goal_fwd, goal_yaw, goal_dist)
+
+            # If still no safe intermediate carrot, pass final goal directly to Nav2.
+            # Nav2's SmacPlanner2D (A*) will plan the complete path around obstacles.
             if carrot is None:
-                carrot = self._straight_ahead_carrot(rx_map, ry_map, map_yaw)
+                carrot = (gx, gy)
         else:
             self._streak = 0
 
-        # ── GATE: clamp carrot so it never overshoots the goal ────────
-        # Project carrot onto robot→goal ray, clamp distance
-        if math.hypot(carrot[0] - rx_map, carrot[1] - ry_map) > dist_to_goal:
-            carrot = (gx, gy)
-            self.get_logger().info('[gate] carrot clamped to goal', throttle_duration_sec=1.0)
+        # ── GATE: ensure carrot makes progress towards goal and does not overshoot ──
+        if goal_dist > 1e-3:
+            goal_dir = np.array([goal_dx / goal_dist, goal_dy / goal_dist])
+            c_vec = np.array([carrot[0] - rx_map, carrot[1] - ry_map])
+            c_dist = math.hypot(c_vec[0], c_vec[1])
+            proj_dist = float(np.dot(c_vec, goal_dir))
 
-        self._publish_carrot(carrot, rx_map, ry_map)
+            # If carrot is in opposite hemisphere (behind robot relative to goal), snap to goal
+            if proj_dist <= 0.0:
+                self.get_logger().warn(
+                    f'[gate] Candidate carrot ({carrot[0]:.2f}, {carrot[1]:.2f}) was behind goal vector! '
+                    f'Snapping to goal ({gx:.2f}, {gy:.2f}).',
+                    throttle_duration_sec=1.0)
+                carrot = (gx, gy)
+            # If carrot overshoots the goal distance, snap to exact goal
+            elif proj_dist > goal_dist or c_dist > goal_dist:
+                carrot = (gx, gy)
+        else:
+            carrot = (gx, gy)
+
+        is_final = (carrot[0] == gx and carrot[1] == gy)
+        if self._should_publish(carrot, is_final=is_final):
+            self._publish_carrot(carrot, rx_map, ry_map, is_final=is_final)
 
 
 def main(args=None):

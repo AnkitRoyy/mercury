@@ -7,7 +7,7 @@ from launch_ros.actions import Node
 # ─── Serial Port Defaults ────────────────────────────────────────────────────
 
 LIDAR_PORT  = '/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_47bd82635cda7e44a9f4fb6e59533130-if00-port0'
-ESP32_S3_PORT = '/dev/ttyACM0'
+ESP32_S3_PORT = '/dev/ttyUSB1'
 GPS_PORT    = '/dev/serial/by-id/usb-u-blox_AG_-_www.u-blox.com_u-blox_GNSS_receiver-if00'
 REALSENSE_SERIAL = ''
 
@@ -30,15 +30,15 @@ CAM_FPS     = 30
 CAM_FORMAT  = 'yuyv2rgb'    # stable on Jazzy; switch to mjpeg2rgb once bug is resolved
 
 PRE_CTRLS = [
-    'auto_exposure=0',              # 1=manual (unlocks exposure_time_absolute)
-    'exposure_time_absolute=4',   # 100µs units; 150=15ms — tuned for indoor/outdoor
-    'focus_automatic_continuous=0', # disable autofocus hunt
+    'auto_exposure=1',              # 1=manual
+    'exposure_time_absolute=20',    # 100µs units; 20=2ms — daytime outdoor tuned
+    'focus_automatic_continuous=0', # fixed focus
 ]
 
 POST_CTRLS = [
-    'brightness=0',                # range 1–64
-    'gain=0',                       # range 0–15
-    'backlight_compensation=0',     # 0=off
+    'brightness=64',                # range 1–64
+    'gain=1',                       # range 0–15
+    'backlight_compensation=1',     # backlight compensation enabled
     'power_line_frequency=1',       # 1=50Hz (India)
 ]
 
@@ -97,6 +97,11 @@ def generate_launch_description():
     lidar_serial_port_arg  = DeclareLaunchArgument('lidar_serial_port',  default_value=LIDAR_PORT)
     esp32_s3_serial_port_arg = DeclareLaunchArgument('esp32_s3_serial_port', default_value=ESP32_S3_PORT)
     gps_serial_port_arg    = DeclareLaunchArgument('gps_serial_port',    default_value=GPS_PORT)
+    publish_odom_tf_arg    = DeclareLaunchArgument(
+        'publish_odom_tf',
+        default_value='false',
+        description='Publish odom->base_link TF directly from wheel_odom_node (keep false when EKF is active)'
+    )
 
     lidar = Node(
         package='rplidar_ros',
@@ -154,6 +159,11 @@ def generate_launch_description():
         executable='wheel_odom_node.py',
         name='wheel_odom_node',
         output='screen',
+        parameters=[{
+            'wheel_radius':     0.16,
+            'wheel_separation': 0.54,
+            'publish_tf':       LaunchConfiguration('publish_odom_tf'),
+        }],
     )
 
     gps = Node(
@@ -177,7 +187,10 @@ def generate_launch_description():
         usb_cam,            
         post_cam_ctrls,    
         lidar_serial_port_arg, lidar,
-        esp32_s3_serial_port_arg, esp32_s3, odom,
+        esp32_s3_serial_port_arg,
+        publish_odom_tf_arg,
+        esp32_s3,
+        odom,
         gps_serial_port_arg, gps,
         realsense
     ])
